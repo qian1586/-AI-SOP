@@ -247,6 +247,18 @@ public partial class App : Application
                             $"屏幕 {SystemParameters.PrimaryScreenWidth:F0}×{SystemParameters.PrimaryScreenHeight:F0}，" +
                             $"窗口 {window.ActualWidth:F0}×{window.ActualHeight:F0}";
                     }
+
+                    // 相机展示位到底有多大、被下面两张卡占掉多少 —— 这是现场最关心的那个数
+                    if (window.FindName("PreviewViewport") is System.Windows.FrameworkElement viewport)
+                    {
+                        layoutNote += Environment.NewLine +
+                            $"相机画面区高度：{viewport.ActualHeight:F0}px";
+                    }
+
+                    if (window.FindName("RoiLearnCard") is System.Windows.FrameworkElement learnCard)
+                    {
+                        layoutNote += $"｜区域学习卡高度：{learnCard.ActualHeight:F0}px";
+                    }
                 }
                 catch (Exception layoutEx)
                 {
