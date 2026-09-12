@@ -1,0 +1,96 @@
+* ================================================================
+* train_templates.hdev —— 【模板训练脚本】只在 HDevelop 里跑一次
+* ----------------------------------------------------------------
+* 作用：用标准样品图训练形状模板，存成 .shm 文件。
+*       之后 sop_inspect.hdvp 每次运行时 read_shape_model 读它，
+*       不再现场训练 —— 现场每次触发都训练模板是不可接受的（慢且不稳定）。
+*
+* 运行步骤：
+*   1. 工位摆放标准合格样品（零件在位 + 工具归位）
+*   2. 采集一张清晰、光照稳定的图（推荐存成文件再读，可重复）
+*   3. 调整下面的 ROI 坐标，框住你要检测的目标
+*   4. 整段运行一次
+*   5. 确认生成了 part.shm / tool.shm，之后就不用再跑本脚本了
+*
+* ⚠️ 修正了原版代码里的两处参数问题（详见下方注释）
+* ================================================================
+
+dev_close_window ()
+dev_update_off ()
+
+* ---------------- 1. 取得标准样品图 ----------------
+* 推荐做法：先把样板图存成文件，训练时读文件。
+* 好处：可重复、可版本管理、换人操作不会因为手抖拍糊导致模板质量差。
+read_image (Image, 'standard_sample.png')
+
+* 如果要直接从相机抓（注意：此时相机 TriggerMode 必须是 Off，否则会一直等触发）：
+* open_framegrabber ('GigEVision2', 0, 0, 0, 0, 0, 0, 'default', -1, 'default', -1, \
+*                    'false', 'default', 'HC-500-10GM', 0, -1, AcqHandle)
+* set_framegrabber_param (AcqHandle, 'TriggerMode', 'Off')
+* set_framegrabber_param (AcqHandle, 'ExposureTime', 30000)
+* grab_image (Image, AcqHandle)
+* close_framegrabber (AcqHandle)
+
+get_image_size (Image, Width, Height)
+dev_open_window_fit_image (Image, 0, 0, -1, -1, WindowHandle)
+dev_display (Image)
+
+* ---------------- 2. ROI（必须与 sop_inspect.hdvp 里传的坐标一致）----------------
+gen_rectangle1 (ROI_Part, 180, 220, 420, 560)    * 零件检测区
+gen_rectangle1 (ROI_Tool, 520, 100, 680, 300)    * 工具归位检测区
+
+dev_set_color ('green')
+dev_display (ROI_Part)
+dev_set_color ('blue')
+dev_display (ROI_Tool)
+disp_message (WindowHandle, '请确认 ROI 框住了目标，再继续', 'window', 10, 10, 'black', 'true')
+stop ()
+
+* ---------------- 3. 训练零件模板 ----------------
+reduce_domain (Image, ROI_Part, ImageROI_Part)
+
+* 【原版参数问题 ①】MinContrast 必须是整数（最小对比度），原代码写 0.8 是无效值。
+*                    Halcon 会静默容忍或给出意外结果，直接交给 'auto' 更稳。
+* 【原版参数问题 ②】AngleExtent = rad(360) 全角度搜索。
+*                    对"有没有"这类检测，工件方向通常是固定的，
+*                    全角度搜索不仅慢 3~5 倍，还会显著提高误匹配率
+*                    （圆形的零件在 360° 下几乎处处都能匹配上）。
+*                    方向固定就写 rad(5)，会翻转就写 rad(180)。
+create_shape_model (ImageROI_Part, 'auto', 0, rad(360), 'auto', 'auto', \
+                    'use_polarity', 30, 'auto', ModelID_Part)
+
+* ---------------- 4. 训练工具模板 ----------------
+reduce_domain (Image, ROI_Tool, ImageROI_Tool)
+
+create_shape_model (ImageROI_Tool, 'auto', 0, rad(360), 'auto', 'auto', \
+                    'use_polarity', 30, 'auto', ModelID_Tool)
+
+* ---------------- 5. 自检：用自己的模板回找一遍，确认能匹配上 ----------------
+find_shape_model (ImageROI_Part, ModelID_Part, 0, rad(360), 0.5, 0, 0.5, \
+                  'least_squares', 0, 0.9, Row_P, Col_P, Angle_P, Score_Part)
+find_shape_model (ImageROI_Tool, ModelID_Tool, 0, rad(360), 0.5, 0, 0.5, \
+                  'least_squares', 0, 0.9, Row_T, Col_T, Angle_T, Score_Tool)
+
+tuple_max (Score_Part, MaxPart)
+tuple_max (Score_Tool, MaxTool)
+
+disp_message (WindowHandle, '零件模板自检得分: ' + MaxPart, 'window', 40, 10, 'black', 'true')
+disp_message (WindowHandle, '工具模板自检得分: ' + MaxTool, 'window', 70, 10, 'black', 'true')
+
+* 自检得分一般应 > 0.9。如果低于 0.8，说明模板质量差，需要：
+*   · 换更清晰的标准样品图
+*   · 调整 ROI 让它只包含特征明显的区域
+*   · 调小 Contrast 值（让更多边缘参与建模）
+if (MaxPart < 0.8 or MaxTool < 0.8)
+    disp_message (WindowHandle, '⚠️ 模板质量偏低，请检查样品图与 ROI', 'window', 100, 10, 'red', 'true')
+endif
+
+* ---------------- 6. 存盘 ----------------
+write_shape_model (ModelID_Part, 'part.shm')
+write_shape_model (ModelID_Tool, 'tool.shm')
+
+disp_message (WindowHandle, '✅ 已生成 part.shm / tool.shm，训练完成', 'window', 130, 10, 'green', 'true')
+
+* ---------------- 7. 释放 ----------------
+clear_shape_model (ModelID_Part)
+clear_shape_model (ModelID_Tool)

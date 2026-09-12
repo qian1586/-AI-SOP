@@ -1,0 +1,245 @@
+* ================================================================
+* sop_standalone.hdev —— 【独立运行版】现场调试专用
+* ----------------------------------------------------------------
+* 相机：HC-500-10GM（GigE 黑白全局快门）
+* 触发：光电传感器 → Line0 → 上升沿硬件触发
+* 功能：硬件触发抓拍 → 双 ROI 检测 → OK/NG 分目录存图 → 图片水印
+*       → 计数 → 文本日志
+*
+* ⚠️ 本文件【只能在 HDevelop 里跑】，不能给 C# / HDevEngine 调。
+*    原因：它自带相机和 while(true) 死循环。
+*    给 C# 用的是同目录的 sop_inspect.hdvp（无相机、无循环）。
+*    两者是配套关系：本文件负责调算法，那个文件负责上产线。
+*
+* ⚠️ 运行前必须先跑一次 train_templates.hdev 生成 part.shm / tool.shm。
+*
+* ================================================================
+* 【相对你原版代码的修正清单】——每一条都标了原因，不照搬
+* ----------------------------------------------------------------
+* ① get_system_time (DateTime)              ← 参数个数错误，会直接报错
+*      Halcon 的 get_system_time 必须带 8 个输出参数，没有单参数版本
+* ② disp_message (ImageWithWaterMark, ...)  ← 第一个参数必须是窗口句柄，不能传图像
+*      这是编译期就过的类型错误。正确做法是画到窗口后 dump_window_image 抓下来
+* ③ make_dir 目录已存在时会报错             ← 加 file_exists 判断
+* ④ create_shape_model 现场训练             ← 改为 read_shape_model 读 .shm
+*      现场每次触发都建模：慢，而且每次模板略有差异会导致判定漂移
+* ⑤ MinContrast 传 0.8                      ← 该参数是整数（见 train_templates.hdev）
+* ⑥ AngleExtent = rad(360)                  ← 有无检测不需要全角度搜索
+* ⑦ 时间戳直接做文件名                      ← 内含冒号，Windows 非法字符
+* ⑧ 日志无 BOM                              ← Excel 打开中文乱码
+* ================================================================
+
+dev_close_window ()
+dev_update_off ()
+
+* ---------------- 0. 全局设置 ----------------
+* 图片和日志统一放到固定目录，不依赖"工程当前目录"（换台机器跑就找不到了）
+BaseDir := 'D:/SOP_Vision/'
+DirOK := BaseDir + 'img_ok/'
+DirNG := BaseDir + 'img_ng/'
+LogFile := BaseDir + 'record_log.txt'
+ModelPart := BaseDir + 'part.shm'
+ModelTool := BaseDir + 'tool.shm'
+
+* 创建目录（先判断再建，避免重复运行时 make_dir 报错）
+foreach (Dir in [BaseDir, DirOK, DirNG])
+    file_exists (Dir, FileExists)
+    if (not FileExists)
+        make_dir (Dir)
+    endif
+endforeach
+
+* 计数
+CountOK := 0
+CountNG := 0
+
+* ROI（与 train_templates.hdev 里训练时用的必须完全一致）
+RoiPartRow1 := 180
+RoiPartCol1 := 220
+RoiPartRow2 := 420
+RoiPartCol2 := 560
+RoiToolRow1 := 520
+RoiToolCol1 := 100
+RoiToolRow2 := 680
+RoiToolCol2 := 300
+
+gen_rectangle1 (ROI_Part, RoiPartRow1, RoiPartCol1, RoiPartRow2, RoiPartCol2)
+gen_rectangle1 (ROI_Tool, RoiToolRow1, RoiToolCol1, RoiToolRow2, RoiToolCol2)
+
+* 匹配得分下限，按现场调整
+MinScore := 0.7
+
+* 两次触发之间的最小间隔（秒）。用来吃掉光电信号的抖动，
+* 否则人手快速挥动时一个动作会连拍好几张，一件产品被当成好几件。
+MinIntervalSec := 0.5
+LastTriggerTime := 0.0
+
+* ---------------- 1. 检查模板文件 ----------------
+file_exists (ModelPart, HasPart)
+file_exists (ModelTool, HasTool)
+if (not HasPart or not HasTool)
+    disp_message (3600, '未找到模板文件，请先运行 train_templates.hdev', 'window', 20, 20, 'red', 'true')
+    stop ()
+endif
+
+* ---------------- 2. 打开相机并配置硬件触发 ----------------
+open_framegrabber ('GigEVision2', 0, 0, 0, 0, 0, 0, 'default', -1, 'default', -1, \
+                   'false', 'default', 'HC-500-10GM', 0, -1, AcqHandle)
+
+* 曝光：按现场光源调。太亮会过曝削顶，太暗噪声大
+set_framegrabber_param (AcqHandle, 'ExposureTime', 30000)
+
+set_framegrabber_param (AcqHandle, 'TriggerMode', 'On')
+set_framegrabber_param (AcqHandle, 'TriggerSource', 'Line0')
+set_framegrabber_param (AcqHandle, 'TriggerActivation', 'RisingEdge')
+
+* ---------------- 3. 取首图，开窗口 ----------------
+* 注意：硬件触发模式下 grab_image 会阻塞等待触发。
+* 这一步只是为了让窗口有尺寸，所以先用软触发模式抓一张，再切回硬触发。
+set_framegrabber_param (AcqHandle, 'TriggerMode', 'Off')
+grab_image (Image, AcqHandle)
+get_image_size (Image, Width, Height)
+set_framegrabber_param (AcqHandle, 'TriggerMode', 'On')
+
+dev_open_window_fit_image (Image, 0, 0, -1, -1, WindowHandle)
+set_display_font (WindowHandle, 16, 'mono', 'true', 'false')
+dev_display (Image)
+
+* 水印用的字体（比默认字体清晰，且固定字号便于对齐）
+set_font (WindowHandle, 'Microsoft YaHei-18')
+
+disp_message (WindowHandle, '就绪 · 等待外部光电触发…', 'window', 10, 10, 'blue', 'true')
+
+* ================================================================
+* 主循环：等待硬件触发 → 检测 → 存图 → 写日志
+* ================================================================
+while (true)
+
+    * ---- 阻塞等待硬件触发信号（无信号时停在这里）----
+    grab_image (Image, AcqHandle)
+
+    * ---- 触发去抖：两次触发太近就丢弃 ----
+    get_system_time (MSecond, Second, Minute, Hour, Day, YDay, Month, Year)
+    NowSec := Hour * 3600.0 + Minute * 60.0 + Second + MSecond / 1000.0
+    if (NowSec - LastTriggerTime < MinIntervalSec)
+        continue
+    endif
+    LastTriggerTime := NowSec
+
+    * ---- 检测 1：零件在位 ----
+    read_shape_model (ModelPart, ModelID_Part)
+    reduce_domain (Image, ROI_Part, Image_Part)
+    find_shape_model (Image_Part, ModelID_Part, 0, rad(360), MinScore, 0, 0.5, \
+                      'least_squares', 0, 0.9, Row_P, Col_P, Angle_P, Score_Part)
+    tuple_length (Score_Part, NumP)
+    if (NumP > 0)
+        tuple_max (Score_Part, MaxScoreP)
+        Part_OK := 1
+        MsgPart := '零件：OK'
+    else
+        MaxScoreP := 0.0
+        Part_OK := 0
+        MsgPart := '零件：缺失/错位 NG'
+    endif
+    clear_shape_model (ModelID_Part)
+
+    * ---- 检测 2：工具归位 ----
+    read_shape_model (ModelTool, ModelID_Tool)
+    reduce_domain (Image, ROI_Tool, Image_Tool)
+    find_shape_model (Image_Tool, ModelID_Tool, 0, rad(360), MinScore, 0, 0.5, \
+                      'least_squares', 0, 0.9, Row_T, Col_T, Angle_T, Score_Tool)
+    tuple_length (Score_Tool, NumT)
+    if (NumT > 0)
+        tuple_max (Score_Tool, MaxScoreT)
+        Tool_OK := 1
+        MsgTool := '工具：已归位 OK'
+    else
+        MaxScoreT := 0.0
+        Tool_OK := 0
+        MsgTool := '工具：已取出 / 缺失 NG'
+    endif
+    clear_shape_model (ModelID_Tool)
+
+    * ---- 综合判定 ----
+    if (Part_OK = 1 and Tool_OK = 1)
+        Step_OK := 1
+        CountOK := CountOK + 1
+        SaveDir := DirOK
+        MsgFinal := '本步骤 OK，可进入下一步'
+        ResultTag := 'OK'
+    else
+        Step_OK := 0
+        CountNG := CountNG + 1
+        SaveDir := DirNG
+        MsgFinal := '本步骤 NG，请修正后重新触发'
+        ResultTag := 'NG'
+    endif
+
+    * ================================================================
+    * 时间戳：拆开重新拼，避开冒号
+    *   get_system_time 必须给 8 个输出参数 —— 这是 Halcon 的固定签名，
+    *   没有"返回一个字符串"的单参数版本（原版代码这里会直接报错）
+    * ================================================================
+    tuple_string (Year, '04d', SYear)
+    tuple_string (Month, '02d', SMonth)
+    tuple_string (Day, '02d', SDay)
+    tuple_string (Hour, '02d', SHour)
+    tuple_string (Minute, '02d', SMinute)
+    tuple_string (Second, '02d', SSecond)
+    tuple_string (MSecond, '03d', SMSecond)
+
+    Stamp := SYear + SMonth + SDay + '_' + SHour + SMinute + SSecond + '_' + SMSecond
+    StampShow := SYear + '-' + SMonth + '-' + SDay + ' ' + SHour + ':' + SMinute + ':' + SSecond
+    FileName := SaveDir + Stamp + '_' + ResultTag + '.png'
+
+    * ================================================================
+    * 水印：必须画在【窗口】上，再用 dump_window_image 抓成图像
+    * ----------------------------------------------------------------
+    * 原版写的是 disp_message (ImageWithWaterMark, ...) —— 第一个参数传了图像，
+    * 但 disp_message 的第一个参数是【窗口句柄】。这是编译期就过不了的错误。
+    * Halcon 里没有"直接在图像对象上写字"的 disp_message，正确链路是：
+    *     dev_display(image) → disp_message(窗口) → dump_window_image → write_image
+    * ================================================================
+    dev_display (Image)
+
+    dev_set_color ('green')
+    dev_display (ROI_Part)
+    dev_set_color ('blue')
+    dev_display (ROI_Tool)
+
+    dev_set_color ('white')
+    disp_message (WindowHandle, 'Time: ' + StampShow, 'window', 8, 8, 'black', 'true')
+    disp_message (WindowHandle, MsgPart, 'window', 34, 8, 'black', 'true')
+    disp_message (WindowHandle, MsgTool, 'window', 60, 8, 'black', 'true')
+
+    if (Step_OK = 1)
+        disp_message (WindowHandle, MsgFinal, 'window', 92, 8, 'green', 'true')
+    else
+        disp_message (WindowHandle, MsgFinal, 'window', 92, 8, 'red', 'true')
+    endif
+
+    disp_message (WindowHandle, 'OK:' + CountOK + '   NG:' + CountNG, 'window', 118, 8, 'blue', 'true')
+
+    * 水印也要落在保存的图片上，所以抓窗口内容
+    dump_window_image (ImageToSave, WindowHandle)
+
+    write_image (ImageToSave, 'png', 0, FileName)
+
+    * ================================================================
+    * 文本日志
+    * ----------------------------------------------------------------
+    * Options 加 'utf8' 保证 Excel / 记事本打开中文不乱码；
+    * 'append' 保证是追加而不是覆盖。
+    * 文件名带 .csv 后缀的话 Excel 双击能直接分列，这里用 tab 分隔兼顾可读性。
+    * ================================================================
+    LogLine := StampShow + ' | ' + MsgPart + ' | ' + MsgTool + ' | ' + MsgFinal \
+               + ' | ScoreP:' + MaxScoreP + ' ScoreT:' + MaxScoreT
+    write_string_file (LogLine, LogFile, ['append', 'new_line', 'utf8'])
+
+endwhile
+
+* ================================================================
+* 资源释放（正常退出时执行；Ctrl+C 中断则不会走到这里，属正常）
+* ================================================================
+close_framegrabber (AcqHandle)
+dev_close_window ()

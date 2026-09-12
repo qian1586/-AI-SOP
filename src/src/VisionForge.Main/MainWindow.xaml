@@ -1,0 +1,2454 @@
+﻿<Window x:Class="VisionForge.Main.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        Title="追觅洗地机AI-SOP监测系统"
+        Height="900" Width="1440"
+        MinHeight="720" MinWidth="1200"
+        Background="{StaticResource BgWindow}"
+        FontFamily="{StaticResource UiFont}"
+        FontSize="13"
+        TextOptions.TextFormattingMode="Display"
+        UseLayoutRounding="True"
+        WindowStartupLocation="CenterScreen">
+
+    <!--
+        主窗口布局（自上而下）：
+          Row0: 顶栏（导航 + 系统标题 + 用户信息）
+          Row1: 主区域（左：相机画面｜右：SOP/参数/状态 三段）
+          Row2: 状态条（报警/连接）
+          Row3: 底部历史表格
+
+        设计哲学：
+          · 所有控件 Style/Template 集中在 App.xaml，XAML 这里只做布局和绑定
+          · 颜色绑定走 Converter（StateKey / Verdict / AlarmKey → Brush）
+          · SOP 步骤用 ItemsControl + DataTemplate，按 StateKey 自动上色
+    -->
+
+    <Grid>
+        <!--
+            界面缩放：倍数在「系统设置」里可调（现场按显示器大小和观看距离自己定）。
+            用 LayoutTransform 而不是给每个控件改字号 —— 一次生效、覆盖全部控件。
+        -->
+        <Grid.LayoutTransform>
+            <ScaleTransform ScaleX="{Binding UiScale}" ScaleY="{Binding UiScale}"/>
+        </Grid.LayoutTransform>
+
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="210"/>
+        </Grid.RowDefinitions>
+
+        <!-- ============================ 顶栏 ============================ -->
+        <Border Grid.Row="0" Background="{StaticResource BgTopBar}"
+                BorderBrush="{StaticResource BgNavLine}" BorderThickness="0,0,0,1">
+            <Grid Height="56">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- 左：导航 + Logo 占位 -->
+                <StackPanel Grid.Column="0" Orientation="Horizontal" Margin="16,0,0,0">
+                    <!--
+                        品牌标识（界面内）：白字透明底那版。
+                        深色顶栏上，黑字会看不见，所以界面里用白字版；
+                        桌面/exe 图标用的是"白底方框 + 黑字"那版（图标要放在任意桌面背景上，
+                        必须自带底色才看得清）。
+                    -->
+                    <Image Source="pack://application:,,,/Assets/logo.png"
+                           Height="34" Margin="0,0,14,0" VerticalAlignment="Center"
+                           RenderOptions.BitmapScalingMode="HighQuality"
+                           ToolTip="追觅洗地机AI-SOP监测系统"/>
+
+                    <RadioButton Style="{StaticResource NavTab}" Content="首页"
+                                 Command="{Binding SwitchPageCommand}" CommandParameter="0"
+                                 IsChecked="{Binding SelectedPageIndex, Converter={StaticResource IndexToBool}, ConverterParameter=0}"/>
+                    <RadioButton Style="{StaticResource NavTab}" Content="配方管理"
+                                 Visibility="{Binding CanSeeRecipePage, Converter={StaticResource BoolToVisibility}}"
+                                 Command="{Binding SwitchPageCommand}" CommandParameter="1"
+                                 IsChecked="{Binding SelectedPageIndex, Converter={StaticResource IndexToBool}, ConverterParameter=1}"/>
+                    <RadioButton Style="{StaticResource NavTab}" Content="历史查询"
+                                 Visibility="{Binding CanSeeHistoryPage, Converter={StaticResource BoolToVisibility}}"
+                                 Command="{Binding SwitchPageCommand}" CommandParameter="2"
+                                 IsChecked="{Binding SelectedPageIndex, Converter={StaticResource IndexToBool}, ConverterParameter=2}"/>
+                    <RadioButton Style="{StaticResource NavTab}" Content="系统设置"
+                                 Visibility="{Binding CanSeeSettingsPage, Converter={StaticResource BoolToVisibility}}"
+                                 Command="{Binding SwitchPageCommand}" CommandParameter="3"
+                                 IsChecked="{Binding SelectedPageIndex, Converter={StaticResource IndexToBool}, ConverterParameter=3}"/>
+                </StackPanel>
+
+                <!-- 中：系统标题（左侧带装饰竖线） -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal"
+                            HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <Rectangle Width="3" Height="22" Fill="{StaticResource BorderAccent}"
+                               Margin="0,0,12,0" RadiusX="1" RadiusY="1"/>
+                    <TextBlock Text="追觅洗地机AI-SOP监测系统"
+                               Foreground="{StaticResource TextPrimary}"
+                               FontSize="20" FontWeight="SemiBold"
+                               VerticalAlignment="Center"/>
+                </StackPanel>
+
+                <!-- 右：操作员 / 用户权限 / 批次 / 产品型号 -->
+                <StackPanel Grid.Column="2" Orientation="Horizontal"
+                            VerticalAlignment="Center" Margin="0,0,20,0">
+                    <Border Background="{StaticResource BgCard}"
+                            BorderBrush="{StaticResource BorderSoft}" BorderThickness="1"
+                            CornerRadius="4" Padding="10,5" Margin="0,0,8,0">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="操作员" Foreground="{StaticResource TextSecond}"
+                                       FontSize="11" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                            <!-- 可编辑：改完会写进配置，检测记录里记的就是这个人 -->
+                            <TextBox Text="{Binding CurrentOperator, UpdateSourceTrigger=PropertyChanged}"
+                                     Background="Transparent" BorderThickness="0"
+                                     Foreground="{StaticResource TextPrimary}"
+                                     CaretBrush="{StaticResource TextPrimary}"
+                                     SelectionBrush="{StaticResource AccentCyan}"
+                                     FontSize="12" FontWeight="SemiBold"
+                                     MinWidth="70" VerticalAlignment="Center"
+                                     ToolTip="点这里可以直接改操作员姓名（会记进历史记录）"/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Background="{StaticResource BgCard}"
+                            BorderBrush="{StaticResource BorderSoft}" BorderThickness="1"
+                            CornerRadius="4" Padding="10,5" Margin="0,0,8,0">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="🔑" FontSize="12" VerticalAlignment="Center"
+                                       Margin="0,0,6,0"/>
+                            <!-- 角色下拉：工程师 / 操作员 / 质检员 -->
+                            <ComboBox ItemsSource="{Binding UserRoles}"
+                                      SelectedItem="{Binding CurrentUser}"
+                                      Style="{StaticResource DarkCombo}"
+                                      Width="96" VerticalAlignment="Center"
+                                      ToolTip="当前角色（首版先做三档，权限校验后续接登录模块）"/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Background="{StaticResource BgCard}"
+                            BorderBrush="{StaticResource BorderSoft}" BorderThickness="1"
+                            CornerRadius="4" Padding="10,5" Margin="0,0,8,0">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="批次" Foreground="{StaticResource TextSecond}"
+                                       FontSize="11" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                            <TextBox Text="{Binding BatchNo, UpdateSourceTrigger=PropertyChanged}"
+                                     Background="Transparent" BorderThickness="0"
+                                     Foreground="{StaticResource TextAccent}"
+                                     CaretBrush="{StaticResource TextAccent}"
+                                     SelectionBrush="{StaticResource AccentCyan}"
+                                     FontSize="12" FontWeight="SemiBold"
+                                     MinWidth="110" VerticalAlignment="Center"
+                                     ToolTip="批次号，可修改；检测记录会带上它"/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Background="{StaticResource BgCard}"
+                            BorderBrush="{StaticResource BorderSoft}" BorderThickness="1"
+                            CornerRadius="4" Padding="10,5">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="型号" Foreground="{StaticResource TextSecond}"
+                                       FontSize="11" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                            <TextBox Text="{Binding ProductModel, UpdateSourceTrigger=PropertyChanged}"
+                                     Background="Transparent" BorderThickness="0"
+                                     Foreground="{StaticResource TextPrimary}"
+                                     CaretBrush="{StaticResource TextPrimary}"
+                                     SelectionBrush="{StaticResource AccentCyan}"
+                                     FontSize="12" FontWeight="SemiBold"
+                                     MinWidth="120" VerticalAlignment="Center"
+                                     ToolTip="产品型号，可修改"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!--
+            ============================ 工具条 ============================
+            参考界面里最实用的一行：导入录像 → 播放/暂停 → 进度 → 右侧各种显示开关。
+            "导入录像"让没有现场硬件时也能把整套流程跑通（录像对上层就是一个相机）。
+        -->
+        <Border Grid.Row="1" Background="{StaticResource BgPanel}"
+                BorderBrush="{StaticResource BgNavLine}" BorderThickness="0,0,0,1"
+                Padding="12,6">
+            <!--
+                整条工具条用一个 WrapPanel：窗口窄了自动换行，不会被裁掉
+                （"按钮被挤没"这个坑踩过三次了，这里一次性做成怎么窄都看得见）。
+                右侧栏那三张空卡片取消后，"启动监测 / 重置流程 / 大屏 / 报警状态"挪到这里来，
+                它们本来就是"随时要用"的动作，放在整宽工具条上比塞在右下角更好按。
+            -->
+            <WrapPanel>
+                <Button Style="{StaticResource PrimaryButton}" Content="▶ 启动监测"
+                        Command="{Binding ConnectCameraCommand}"
+                        Margin="0,0,6,6" Padding="14,5" FontSize="11"
+                        ToolTip="连接相机 / 开始这一步的监测"/>
+                <Button Style="{StaticResource ToolButton}" Content="⟲ 重置流程"
+                        Command="{Binding ResetSopCommand}"
+                        Margin="0,0,6,6" Padding="12,5" FontSize="11"
+                        ToolTip="把流程复位到第一道工序（开始下一件）"/>
+                <Button Style="{StaticResource ToolButton}" Content="🖥 大屏"
+                        Command="{Binding OpenBoardCommand}"
+                        Margin="0,0,6,6" Padding="12,5" FontSize="11"
+                        ToolTip="打开作业看板大屏（ESC 退出全屏）"/>
+
+                <Button Style="{StaticResource ToolButton}" Content="📹 导入录像"
+                        Command="{Binding ImportVideoCommand}"
+                        Margin="6,0,6,6" Padding="14,5" FontSize="11"
+                        ToolTip="选一段工位实拍录像当相机用 —— 没有相机也能框 ROI、教 OK/NG、看计时"/>
+                <Button Style="{StaticResource ToolButton}" Content="{Binding VideoPlayButtonText}"
+                        Command="{Binding ToggleVideoPlayCommand}"
+                        Margin="0,0,6,6" Padding="12,5" FontSize="11"
+                        Visibility="{Binding IsVideoSource, Converter={StaticResource BoolToVisibility}}"
+                        ToolTip="播放 / 暂停录像"/>
+                <Button Style="{StaticResource ToolButton}" Content="⟲ 从头再播"
+                        Command="{Binding RestartVideoCommand}"
+                        Margin="0,0,6,6" Padding="12,5" FontSize="11"
+                        Visibility="{Binding IsVideoSource, Converter={StaticResource BoolToVisibility}}"
+                        ToolTip="回到录像开头（换一件产品时用）"/>
+                <Button Style="{StaticResource ToolButton}" Content="⏹ 停止分析"
+                        Command="{Binding DisconnectCameraCommand}"
+                        Margin="0,0,6,6" Padding="12,5" FontSize="11"
+                        Visibility="{Binding IsVideoSource, Converter={StaticResource BoolToVisibility}}"
+                        ToolTip="停止用录像当相机"/>
+
+                <!-- 录像进度：有录像时才占位置 -->
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center"
+                            Margin="0,0,10,6"
+                            Visibility="{Binding IsVideoSource, Converter={StaticResource BoolToVisibility}}">
+                    <ProgressBar Width="150" Height="6" Minimum="0" Maximum="1"
+                                 Value="{Binding VideoProgress, Mode=OneWay}"
+                                 Background="{StaticResource BgPanelDeep}"
+                                 Foreground="{StaticResource AccentCyan}"
+                                 VerticalAlignment="Center"/>
+                    <TextBlock Text="{Binding VideoTimeText}" Foreground="{StaticResource TextSecond}"
+                               FontFamily="{StaticResource MonoFont}" FontSize="11"
+                               VerticalAlignment="Center" Margin="8,0,0,0"/>
+                    <TextBlock Text="{Binding VideoNameText}" Foreground="{StaticResource TextMuted}"
+                               FontSize="11" VerticalAlignment="Center" Margin="10,0,0,0"
+                               TextTrimming="CharacterEllipsis" MaxWidth="180"/>
+                </StackPanel>
+
+                <!-- 声光报警状态：原来在右下角卡片里，挪上来后一眼就能看到 -->
+                <Border CornerRadius="4" Padding="10,5" Margin="0,0,10,6" VerticalAlignment="Center">
+                    <Border.Style>
+                        <Style TargetType="Border">
+                            <Setter Property="Background" Value="Transparent"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding AlarmSignalKey}" Value="ok">
+                                    <Setter Property="Background" Value="{StaticResource StateOk}"/>
+                                    <Setter Property="Opacity" Value="0.18"/>
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding AlarmSignalKey}" Value="warning">
+                                    <Setter Property="Background" Value="{StaticResource StateWarn}"/>
+                                    <Setter Property="Opacity" Value="0.85"/>
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding AlarmSignalKey}" Value="fault">
+                                    <Setter Property="Background" Value="{StaticResource StateNg}"/>
+                                    <Setter Property="Opacity" Value="0.85"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
+                    <TextBlock Text="{Binding AlarmStatusText}"
+                               Foreground="{Binding AlarmSignalKey, Converter={StaticResource AlarmKeyToBrush}}"
+                               FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                </Border>
+
+                <Button Style="{StaticResource ToolButton}" Content="{Binding ShowRoiBoxesButtonText}"
+                        Command="{Binding ToggleShowRoiBoxesCommand}"
+                        Margin="0,0,6,6" Padding="10,5" FontSize="11"
+                        ToolTip="显示/隐藏画面上的框"/>
+                <Button Style="{StaticResource ToolButton}" Content="{Binding PoseButtonText}"
+                        Command="{Binding TogglePosePointsCommand}"
+                        Margin="0,0,6,6" Padding="10,5" FontSize="11"
+                        ToolTip="显示/隐藏手部关键点（数据来自过程监测的手部姿态；当前为模拟手轨迹，接入手部模型后即为真实关键点）"/>
+                <Button Style="{StaticResource ToolButton}" Content="📷 画面抓拍"
+                        Command="{Binding SnapshotCommand}"
+                        Margin="0,0,6,6" Padding="10,5" FontSize="11"
+                        ToolTip="把当前画面存一张 PNG（取证用）"/>
+                <Button Style="{StaticResource ToolButton}" Content="📁 日志目录"
+                        Command="{Binding OpenLogFolderCommand}"
+                        Margin="0,0,0,6" Padding="10,5" FontSize="11"
+                        ToolTip="打开日志文件夹（发给供应商排查时最省事）"/>
+            </WrapPanel>
+        </Border>
+
+        <!-- ============================ 主区域 ============================ -->
+        <Grid Grid.Row="2" Margin="12">
+            <!-- ==================== 页面 1：首页（实时监测） ==================== -->
+            <Grid Visibility="{Binding SelectedPageIndex, Converter={StaticResource IndexToVisibility}, ConverterParameter=0}">
+            <Grid.ColumnDefinitions>
+                <!--
+                    三栏并列（按现场要求调的）：
+                      画面（比原来窄 2/5） | 现场状态 + 动作计时（竖排） | 工序 / 参数 / 系统状态
+                    状态那一栏原来是画面下面一整条，现在改成竖排挪到画面右边 ——
+                    这样画面不再占满整宽，右边的信息也不用低头找。
+                -->
+                <!-- 现场状态那一栏再窄一半（1.2* → 0.6*），省下来的宽度全给画面（1.8* → 2.4*） -->
+                <ColumnDefinition Width="2.4*" MinWidth="420"/>
+                <ColumnDefinition Width="12"/>
+                <ColumnDefinition Width="0.6*" MinWidth="150"/>
+                <ColumnDefinition Width="12"/>
+                <ColumnDefinition Width="1.2*" MinWidth="320"/>
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <!-- ============ 左侧：相机实时画面 ============ -->
+            <Border Grid.Column="0" Style="{StaticResource CardBorder}">
+                <!-- 这一层是"画面区域"的根：鼠标事件同时挂在这里和画布上，
+                     这样从浮层（标定提示条 / 工具条）上起手拖拽也能画框 -->
+                <Grid x:Name="PreviewHost">
+                    <!--
+                        画面区分两行：
+                          行 0 = 相机画面（含各种浮层：工具条 / 标定提示 / 等待触发）
+                          行 1 = 底部步骤序列条：每一步一个小框，绿=过了、红=没监测到
+                        步骤条放在画面正下方，是为了"操作员一眼看到做到第几步"——
+                        不用把视线挪到右边栏去找。
+                    -->
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <!--
+                        画面用一个 960×720 的"预览基准画布"承载，外层 Viewbox 等比缩放。
+                        图像铺满基准画布（Stretch=Fill 不变形，因为 Viewbox 整体等比缩放），
+                        ROI 框坐标 = 归一化坐标 × 基准尺寸，跟图像内容严格对齐。
+                        这样换相机分辨率（配方 ROI 是归一化的）也不影响叠加位置。
+                    -->
+                    <!--
+                        视口（PreviewViewport）：滚轮放大缩小、左键按住拖动挪画面。
+                        两层分工（这点很关键，弄反了画面会盖到别的区域）：
+                          · PreviewViewport：只负责"裁剪"，自己不做任何变换（ClipToBounds 在它身上）
+                          · ZoomHost（内层 Viewbox）：缩放/平移加在它身上
+                        因为 ClipToBounds 裁的是"元素自己的矩形"，如果变换挂在裁剪层上，
+                        裁剪矩形会被一起放大 —— 画面就会溢出到工具条、步骤条、别的卡片上。
+                    -->
+                    <Grid x:Name="PreviewViewport" Grid.Row="0"
+                          ClipToBounds="True"
+                          Background="{StaticResource BgPanelDeep}">
+                    <Viewbox x:Name="ZoomHost" Stretch="Uniform" RenderTransformOrigin="0,0">
+                        <Grid x:Name="RoiCanvasHost" Width="960" Height="720"
+                              Background="{StaticResource BgPanelDeep}">
+                            <Grid.Style>
+                                <Style TargetType="Grid">
+                                    <Style.Triggers>
+                                        <!-- 标定模式下光标变十字，提示可画框 -->
+                                        <DataTrigger Binding="{Binding IsRoiEditMode}" Value="True">
+                                            <Setter Property="Cursor" Value="Cross"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Grid.Style>
+                            <Image Source="{Binding PreviewImage}"
+                                   Width="960" Height="720"
+                                   Stretch="Fill"
+                                   RenderOptions.BitmapScalingMode="HighQuality"/>
+
+                            <!-- 动态 ROI 叠加层：从 ActiveRecipe.Rois 换算而来 -->
+                            <ItemsControl ItemsSource="{Binding RoiOverlays}"
+                                          Visibility="{Binding ShowRoiBoxes, Converter={StaticResource BoolToVisibility}}"
+                                          IsHitTestVisible="False">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <Canvas/>
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <!--
+                                    Canvas.Left/Top 必须设在 ItemContainer（ContentPresenter）上，
+                                    因为它是 Canvas 的直接子元素；DataTemplate 根元素是 ContentPresenter 的内容，
+                                    写在那上面坐标不生效。
+                                -->
+                                <ItemsControl.ItemContainerStyle>
+                                    <Style TargetType="ContentPresenter">
+                                        <Setter Property="Canvas.Left" Value="{Binding X}"/>
+                                        <Setter Property="Canvas.Top"  Value="{Binding Y}"/>
+                                    </Style>
+                                </ItemsControl.ItemContainerStyle>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Width="{Binding Width}" Height="{Binding Height}"
+                                                BorderBrush="{Binding Stroke}" BorderThickness="2"
+                                                Background="Transparent"
+                                                SnapsToDevicePixels="True">
+                                            <Grid>
+                                                <!-- 左上角名称标签（同色底 + 深色字） -->
+                                                <Border Background="{Binding LabelBackground}"
+                                                        CornerRadius="0,0,4,0"
+                                                        HorizontalAlignment="Left" VerticalAlignment="Top"
+                                                        Padding="7,3">
+                                                    <TextBlock Text="{Binding Label}"
+                                                               Foreground="#0A101A"
+                                                               FontSize="11" FontWeight="Bold"/>
+                                                </Border>
+                                            </Grid>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+
+                            <!--
+                                手部关键点叠加（参考界面那个绿色骨架）。
+                                数据来自过程监测的手部姿态；当前是模拟手轨迹 —— 开关的提示里也照实写了。
+                            -->
+                            <ItemsControl ItemsSource="{Binding PosePoints}"
+                                          Visibility="{Binding ShowPosePoints, Converter={StaticResource BoolToVisibility}}"
+                                          IsHitTestVisible="False">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <Canvas/>
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemContainerStyle>
+                                    <Style TargetType="ContentPresenter">
+                                        <Setter Property="Canvas.Left" Value="{Binding X}"/>
+                                        <Setter Property="Canvas.Top"  Value="{Binding Y}"/>
+                                        <Setter Property="Visibility"
+                                                Value="{Binding Visible, Converter={StaticResource BoolToVisibility}}"/>
+                                    </Style>
+                                </ItemsControl.ItemContainerStyle>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Ellipse Width="8" Height="8" Margin="-4,-4,0,0"
+                                                 Fill="#8822C55E" Stroke="#CC7CFF9A" StrokeThickness="1"/>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+
+                            <!-- 草稿框：标定模式下正在拖拽的临时虚线框 -->
+                            <Canvas IsHitTestVisible="False">
+                                <Rectangle Canvas.Left="{Binding RoiDraftX}"
+                                           Canvas.Top="{Binding RoiDraftY}"
+                                           Width="{Binding RoiDraftW}"
+                                           Height="{Binding RoiDraftH}"
+                                           MinWidth="2" MinHeight="2"
+                                           Stroke="{StaticResource TextAccent}" StrokeThickness="2"
+                                           StrokeDashArray="4 2" Fill="#2200D4D4"
+                                           RadiusX="2" RadiusY="2"
+                                           Visibility="{Binding RoiDraftVisible, Converter={StaticResource BoolToVisibility}}"/>
+                            </Canvas>
+                        </Grid>
+                    </Viewbox>
+                    </Grid>
+
+                    <!-- 空画面时的占位提示 -->
+                    <TextBlock Grid.Row="0" Text="相机未连接"
+                               Foreground="{StaticResource TextMuted}"
+                               FontSize="14"
+                               HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding PreviewImage}" Value="{x:Null}">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+
+                    <!--
+                        左下角工具条：建图 / 标定 / 显示开关
+                        现场顺序：① 导入现场照片（没相机时）→ ② 标定 ROI 框出抓取位置
+                                 → ③ 同步为判定区域 → 之后人手进入该区域就算这一步做到了。
+                    -->
+                    <StackPanel Grid.Row="0" HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                                Margin="12,0,0,12">
+                        <!-- 当前底图来源：相机画面 / 导入的现场照片 -->
+                        <Border Background="#CC0F1827" CornerRadius="4" Padding="8,4"
+                                HorizontalAlignment="Left" Margin="0,0,0,6">
+                            <TextBlock Text="{Binding SceneImageHint}"
+                                       Foreground="{StaticResource TextAccent}"
+                                       FontSize="11" FontWeight="SemiBold"/>
+                        </Border>
+
+                        <!-- 用 WrapPanel：按钮多了会自动换行，窄屏也不会把右边的按钮挤没 -->
+                        <WrapPanel>
+                            <Border Background="#CC0A101A" CornerRadius="4" Padding="8,4" Margin="0,0,0,6">
+                                <StackPanel Orientation="Horizontal">
+                                    <Ellipse Width="8" Height="8" Fill="#EF4444" Margin="0,0,6,0"
+                                             VerticalAlignment="Center"/>
+                                    <TextBlock Text="LIVE" Foreground="{StaticResource TextPrimary}"
+                                               FontSize="12" FontWeight="Bold"
+                                               VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                    <TextBlock Text="●" Foreground="{StaticResource TextMuted}"
+                                               FontSize="12" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                    <TextBlock Text="◐" Foreground="{StaticResource TextMuted}"
+                                               FontSize="12" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                    <TextBlock Text="✕" Foreground="{StaticResource TextMuted}"
+                                               FontSize="12" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- 标定 ROI 开关 -->
+                            <Button Style="{StaticResource ToolButton}"
+                                    Content="{Binding RoiEditButtonText}"
+                                    Command="{Binding ToggleRoiEditCommand}"
+                                    Margin="8,0,0,6"
+                                    FontSize="11"/>
+
+                            <!-- 清空 ROI（仅编辑模式显示） -->
+                            <Button Style="{StaticResource ToolButton}"
+                                    Content="清空 ROI"
+                                    Command="{Binding ClearRoisCommand}"
+                                    Margin="6,0,0,6"
+                                    FontSize="11"
+                                    Visibility="{Binding IsRoiEditMode, Converter={StaticResource BoolToVisibility}}"/>
+
+                            <!-- 导入现场照片当底图：没相机也能标位置、也能判定 -->
+                            <Button Style="{StaticResource ToolButton}"
+                                    Content="📷 导入现场图片"
+                                    Command="{Binding ImportSceneImageCommand}"
+                                    Margin="6,0,0,6"
+                                    FontSize="11"
+                                    ToolTip="导一张工位实拍图，在图上框出抓取位置 —— 没有相机也能先把工位建起来"/>
+
+                            <!-- 切回相机画面 -->
+                            <Button Style="{StaticResource ToolButton}"
+                                    Content="⟲ 回到相机画面"
+                                    Command="{Binding UseCameraPreviewCommand}"
+                                    Margin="6,0,0,6"
+                                    FontSize="11"
+                                    ToolTip="照片只是标定用的底图；看完点这里回到相机实时画面"/>
+
+                            <!-- 把框同步成判定区域：人手进区域即判定 -->
+                            <Button Style="{StaticResource PrimaryButton}"
+                                    Content="⇄ 同步为判定区域"
+                                    Command="{Binding SyncRoisToTargetsCommand}"
+                                    Margin="6,0,0,6"
+                                    FontSize="11"
+                                    ToolTip="把画好的框变成判定区域：人手进入某个框并停留够时间，就算这一步做到了"/>
+
+                            <!-- 框的显隐 -->
+                            <Button Style="{StaticResource ToolButton}"
+                                    Content="{Binding ShowRoiBoxesButtonText}"
+                                    Command="{Binding ToggleShowRoiBoxesCommand}"
+                                    Margin="6,0,0,6"
+                                    FontSize="11"
+                                    ToolTip="画面上的框挡住视线时可以隐藏；判定逻辑不受影响"/>
+                        </WrapPanel>
+                    </StackPanel>
+
+                    <!-- 标定模式提示条（画面顶部中央） -->
+                    <Border Grid.Row="0" Background="#CC0F1827"
+                            BorderBrush="{StaticResource BorderAccent}" BorderThickness="1"
+                            CornerRadius="4" Padding="12,6"
+                            HorizontalAlignment="Center" VerticalAlignment="Top"
+                            Margin="0,12,0,0"
+                            Visibility="{Binding IsRoiEditMode, Converter={StaticResource BoolToVisibility}}">
+                        <TextBlock Text="{Binding RoiEditHint}"
+                                   Foreground="{StaticResource TextAccent}"
+                                   FontSize="12" FontWeight="SemiBold"/>
+                    </Border>
+
+                    <!--
+                        右上角浮窗：两块一起放在同一个纵向 StackPanel 里，
+                        这样"缩放条"永远紧贴"等待触发"的正下方 —— 不靠写死的间距
+                        （等待触发那块的高度会随提示文字长短变化）。
+                          ① 等待触发 + 当前步骤
+                          ② 缩放比例 / － / ＋ / 复位
+                    -->
+                    <StackPanel Grid.Row="0" HorizontalAlignment="Right" VerticalAlignment="Top"
+                                Margin="0,16,16,0">
+                    <Border Background="#CC0F1827"
+                            BorderBrush="{StaticResource BorderAccent}" BorderThickness="1"
+                            CornerRadius="6"
+                            Padding="14,10">
+                        <StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                                <Ellipse Width="8" Height="8" Margin="0,0,8,0"
+                                         VerticalAlignment="Center">
+                                    <Ellipse.Style>
+                                        <Style TargetType="Ellipse">
+                                            <Setter Property="Fill" Value="{StaticResource TextMuted}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding SystemRunning}" Value="True">
+                                                    <Setter Property="Fill" Value="{StaticResource AccentCyan}"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Ellipse.Style>
+                                </Ellipse>
+                                <TextBlock Text="等待触发"
+                                           Foreground="{StaticResource TextPrimary}"
+                                           FontSize="13" FontWeight="SemiBold"/>
+                            </StackPanel>
+                            <TextBlock Foreground="{StaticResource TextSecond}" FontSize="12">
+                                <Run Text="当前步骤："/>
+                                <Run Text="{Binding Sop.CurrentStepText, Mode=OneWay}"
+                                     Foreground="{StaticResource TextAccent}"
+                                     FontWeight="SemiBold"/>
+                            </TextBlock>
+                            <TextBlock Text="{Binding Sop.CurrentHint}"
+                                       Foreground="{StaticResource TextSecond}"
+                                       FontSize="12" Margin="0,2,0,0"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!--
+                        缩放条：紧贴上面"等待触发"那块的正下方。
+                        滚轮 = 以鼠标位置为中心放大/缩小；左键按住拖动 = 图片挪到任意位置；
+                        标定模式下左键是画框，这段时间要挪画面就按住滚轮拖。
+                    -->
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,6,0,0">
+                        <Border Background="#CC0A101A" CornerRadius="4" Padding="8,4" Margin="0,0,6,0"
+                                ToolTip="滚轮 = 放大/缩小（以鼠标位置为中心）｜左键按住拖动 = 把图片挪到任意位置｜标定模式下左键是画框，想挪画面就按住滚轮拖">
+                            <TextBlock Text="{Binding ZoomText}"
+                                       Foreground="{StaticResource TextAccent}"
+                                       FontSize="11" FontWeight="Bold" VerticalAlignment="Center"/>
+                        </Border>
+                        <Button Style="{StaticResource ToolButton}" Content="－"
+                                Command="{Binding ZoomOutCommand}"
+                                Margin="0,0,4,0" Padding="10,4" FontSize="11"
+                                ToolTip="缩小"/>
+                        <Button Style="{StaticResource ToolButton}" Content="＋"
+                                Command="{Binding ZoomInCommand}"
+                                Margin="0,0,4,0" Padding="10,4" FontSize="11"
+                                ToolTip="放大"/>
+                        <Button Style="{StaticResource ToolButton}" Content="⟲ 复位"
+                                Command="{Binding ResetViewportCommand}"
+                                Margin="0" Padding="10,4" FontSize="11"
+                                ToolTip="回到 100% 并居中"/>
+                    </StackPanel>
+                    </StackPanel>
+
+                    <!--
+                        ===== 底部步骤序列条 =====
+                        每道工序一个小框：
+                          绿 = 这一步过了（监测到了）
+                          红 = 这一步没监测到（跳步 / 漏做）/ 不合格
+                          橙 = 现在正该做这一步
+                          灰 = 还没轮到
+                        点任意一个小框 → 跳到这一步的检测参数去改。
+                    -->
+                    <Border Grid.Row="1" Background="{StaticResource BgPanelDeep}"
+                            BorderBrush="{StaticResource BorderSoft}" BorderThickness="1"
+                            CornerRadius="6" Padding="10,8" Margin="0,8,0,0">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Grid.Column="0" Text="框位"
+                                       Foreground="{StaticResource TextPrimary}"
+                                       FontSize="12" FontWeight="SemiBold"
+                                       VerticalAlignment="Center" Margin="0,0,10,0"
+                                       ToolTip="一格 = 你在画面上画的一个框（第 N 个框 = 第 N 道工序）"/>
+
+                            <!--
+                                一格 = 一个框：画一个框，这里就多一格（不再是"固定 6 格"）。
+                                格子跟着这个框的识别结果变色：绿=有东西 / 红=被拿走 / 橙=拿不准 / 灰=未教。
+                            -->
+                            <ItemsControl Grid.Column="1" ItemsSource="{Binding RoiTargets}"
+                                          VerticalAlignment="Center">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <WrapPanel/>
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Button Style="{StaticResource StepTileButton}"
+                                                Width="92" Height="56" Margin="0,0,6,6" Padding="6,4"
+                                                Background="{Binding StateKey, Converter={StaticResource StateKeyToBg}}"
+                                                BorderBrush="{Binding StateKey, Converter={StaticResource StateKeyToBrush}}"
+                                                Command="{Binding DataContext.SelectRoiTargetCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                CommandParameter="{Binding}"
+                                                ToolTip="{Binding TileHint}">
+                                            <!--
+                                                右键菜单：改设置 / 删除这个框。
+                                                以前右键是直接弹设置窗口、没有删除入口，现场找不到删框的地方。
+                                            -->
+                                            <Button.ContextMenu>
+                                                <ContextMenu>
+                                                    <MenuItem Header="步骤设置（名称 / 参数）…"
+                                                              Click="OnRoiTileSettingsClick"
+                                                              DataContext="{Binding}"/>
+                                                    <Separator/>
+                                                    <!-- 误检修正：这一下判错了，一句话纠正，当场变成样本（AI 自学习的最强信号） -->
+                                                    <MenuItem Header="标记误判：其实是对的（记 OK）"
+                                                              Click="OnRoiTileMarkOkClick"
+                                                              DataContext="{Binding}"/>
+                                                    <MenuItem Header="标记误判：其实是错的（记 NG）"
+                                                              Click="OnRoiTileMarkNgClick"
+                                                              DataContext="{Binding}"/>
+                                                    <Separator/>
+                                                    <MenuItem Header="删除这个框" Foreground="#FF7A7A"
+                                                              Click="OnRoiTileDeleteClick"
+                                                              DataContext="{Binding}"/>
+                                                </ContextMenu>
+                                            </Button.ContextMenu>
+                                            <Grid>
+                                                <!-- 证据帧：判定那一刻的画面（学参考界面"每步留证据"，嵌进格子里不另占地方） -->
+                                                <Image Source="{Binding EvidenceImage}" Stretch="UniformToFill"
+                                                       Opacity="0.45"
+                                                       RenderOptions.BitmapScalingMode="HighQuality"/>
+                                            <StackPanel>
+                                                <StackPanel Orientation="Horizontal">
+                                                    <Border Width="16" Height="16" CornerRadius="8"
+                                                            Background="{Binding StateKey, Converter={StaticResource StateKeyToBrush}}">
+                                                        <TextBlock Text="{Binding Index}"
+                                                                   Foreground="#0A101A"
+                                                                   FontSize="10" FontWeight="Bold"
+                                                                   HorizontalAlignment="Center"
+                                                                   VerticalAlignment="Center"/>
+                                                    </Border>
+                                                    <TextBlock Text="{Binding StateText}"
+                                                               Foreground="{Binding StateKey, Converter={StaticResource StateKeyToBrush}}"
+                                                               FontSize="10" FontWeight="Bold"
+                                                               Margin="5,0,0,0"
+                                                               VerticalAlignment="Center"/>
+                                                </StackPanel>
+                                                <TextBlock Text="{Binding Name}"
+                                                           Foreground="{StaticResource TextPrimary}"
+                                                           FontSize="10" FontWeight="SemiBold"
+                                                           TextWrapping="Wrap"
+                                                           TextTrimming="CharacterEllipsis"
+                                                           Margin="0,2,0,0"/>
+                                            </StackPanel>
+                                            </Grid>
+                                        </Button>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+
+                            <StackPanel Grid.Column="2" VerticalAlignment="Center" Margin="10,0,0,0">
+                                <TextBlock Text="{Binding RoiBoxCountText}"
+                                           Foreground="{StaticResource TextSecond}"
+                                           FontSize="11" HorizontalAlignment="Right"/>
+                                <TextBlock Text="{Binding Sop.ProgressText}"
+                                           Foreground="{StaticResource TextMuted}"
+                                           FontSize="11" HorizontalAlignment="Right"/>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <!--
+                        ===== 区域学习（按框教 OK / NG）=====
+                        用法和基恩士抓取设定一样：
+                          选一个框 → 零件放好时点「记 OK」→ 零件拿走时点「记 NG」→ 各教几条 → 点「开始识别」
+                        之后每个框自己判"有 / 没有"：绿=有（OK），红=没有（NG），橙=拿不准（要补样本）。
+                        点画面上的框也能选中它（不用非要在下拉里找）。
+                    -->
+                    <Border Grid.Row="2" Background="{StaticResource BgPanelDeep}"
+                            BorderBrush="{StaticResource BorderSoft}" BorderThickness="1"
+                            CornerRadius="6" Padding="10,8" Margin="0,8,0,0">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <!--
+                                第一行：选框 + 教 OK / 教 NG + 识别 + 计数 + 结论。
+                                用 WrapPanel：画面列变窄后，一行放不下会自动换行，不会被裁掉
+                                （"按钮被挤没"这个坑在前面已经踩过两次）。
+                            -->
+                            <WrapPanel Grid.Row="0">
+                                <TextBlock Text="区域学习（真实判定）"
+                                           Foreground="{StaticResource TextPrimary}"
+                                           FontSize="12" FontWeight="SemiBold"
+                                           VerticalAlignment="Center" Margin="0,0,8,6"/>
+
+                                <ComboBox Style="{StaticResource DarkCombo}"
+                                          Width="170" Margin="0,0,8,6"
+                                          ItemsSource="{Binding RoiTargets}"
+                                          DisplayMemberPath="Label"
+                                          SelectedItem="{Binding SelectedRoiTarget}"
+                                          ToolTip="选要教哪个框（也可以直接在画面上点那个框）"/>
+
+                                <Button Style="{StaticResource PrimaryButton}"
+                                        Content="✔ 记 OK"
+                                        Command="{Binding CaptureRoiOkCommand}"
+                                        Margin="0,0,6,6" Padding="12,5" FontSize="11"
+                                        ToolTip="框里有这个东西 = OK（零件放好了就点这个）"/>
+                                <Button Style="{StaticResource DangerButton}"
+                                        Content="✘ 记 NG"
+                                        Command="{Binding CaptureRoiNgCommand}"
+                                        Margin="0,0,6,6" Padding="12,5" FontSize="11"
+                                        ToolTip="东西被拿走 / 空框 = NG（把零件取走就点这个）"/>
+                                <Button Style="{StaticResource ToolButton}"
+                                        Content="{Binding RoiLearnButtonText}"
+                                        Command="{Binding ToggleRoiLearnCommand}"
+                                        Margin="0,0,6,6" Padding="12,5" FontSize="11"
+                                        ToolTip="开始之后每个框自己判有/没有"/>
+                                <Button Style="{StaticResource ToolButton}"
+                                        Content="清空本框"
+                                        Command="{Binding ClearRoiTargetSamplesCommand}"
+                                        Margin="0,0,10,6" Padding="10,5" FontSize="11"
+                                        ToolTip="这个框教错了，一键重来"/>
+
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center"
+                                            Margin="0,0,10,6">
+                                    <TextBlock Text="{Binding RoiTargetSampleText}"
+                                               Foreground="{StaticResource TextSecond}"
+                                               FontSize="11" VerticalAlignment="Center"/>
+                                    <TextBlock Text="相似度阈值" Foreground="{StaticResource TextMuted}"
+                                               FontSize="11" Margin="10,0,4,0" VerticalAlignment="Center"/>
+                                    <TextBox Style="{StaticResource DarkInput}" Width="52"
+                                             Text="{Binding SimilarityThreshold, UpdateSourceTrigger=PropertyChanged}"
+                                             ToolTip="低于这个相似度就判「无法判定」，宁可让人确认也不乱判"/>
+                                </StackPanel>
+
+                                <!-- 结论：一眼看到这个框现在是什么 -->
+                                <Border CornerRadius="4" Padding="10,4" Margin="0,0,0,6"
+                                        VerticalAlignment="Center"
+                                        Background="{Binding RoiLearnStateKey, Converter={StaticResource StateKeyToBg}}"
+                                        BorderThickness="1"
+                                        BorderBrush="{Binding RoiLearnStateKey, Converter={StaticResource StateKeyToBrush}}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="{Binding RoiLearnResultText}"
+                                                   Foreground="{Binding RoiLearnStateKey, Converter={StaticResource StateKeyToBrush}}"
+                                                   FontSize="15" FontWeight="Bold" VerticalAlignment="Center"/>
+                                        <TextBlock Text="{Binding RoiLearnConfidenceText}"
+                                                   Foreground="{StaticResource TextSecond}"
+                                                   FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </Border>
+                            </WrapPanel>
+
+                            <!-- 第二行：样本缩略图 + 提示 -->
+                            <Grid Grid.Row="1" Margin="0,6,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <!--
+                                    没有真相机时（模拟相机）用这两个按钮造场景：
+                                    点「放上一块」→ 记 OK；点「拿走了」→ 记 NG。
+                                    真实相机上这两个按钮不显示（用真零件教就行）。
+                                -->
+                                <StackPanel Grid.Column="0" Orientation="Horizontal"
+                                            VerticalAlignment="Top" Margin="0,0,10,0"
+                                            Visibility="{Binding IsMockSceneAvailable, Converter={StaticResource BoolToVisibility}}">
+                                    <Button Style="{StaticResource ToolButton}" Content="模拟：放上一块"
+                                            Command="{Binding SimulateObjectPresentCommand}"
+                                            Padding="8,3" FontSize="11" Margin="0,0,4,0"
+                                            ToolTip="（没有真相机时用）在选中的框里放一块料，然后点「记 OK」"/>
+                                    <Button Style="{StaticResource ToolButton}" Content="模拟：拿走了"
+                                            Command="{Binding SimulateObjectGoneCommand}"
+                                            Padding="8,3" FontSize="11" Margin="0"
+                                            ToolTip="（没有真相机时用）把选中的框里的料拿走（空框），然后点「记 NG」"/>
+                                </StackPanel>
+
+                                <TextBlock Grid.Column="1" Text="样本" Foreground="{StaticResource TextSecond}"
+                                           FontSize="11" VerticalAlignment="Top" Margin="0,2,8,0"/>
+
+                                <ScrollViewer Grid.Column="2" HorizontalScrollBarVisibility="Auto"
+                                              VerticalScrollBarVisibility="Disabled">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="这个框还没教过：点「记 OK」「记 NG」各教几条"
+                                                   Foreground="{StaticResource TextMuted}" FontSize="11"
+                                                   VerticalAlignment="Center">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding SelectedRoiSamples.Count}" Value="0">
+                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+
+                                        <ItemsControl ItemsSource="{Binding SelectedRoiSamples}">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate>
+                                                    <StackPanel Orientation="Horizontal"/>
+                                                </ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border Margin="0,0,6,0" CornerRadius="3" Padding="2"
+                                                            BorderThickness="1"
+                                                            Background="{StaticResource BgPanel}">
+                                                        <Border.Style>
+                                                            <Style TargetType="Border">
+                                                                <Setter Property="BorderBrush" Value="{StaticResource StateNg}"/>
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding IsOk}" Value="True">
+                                                                        <Setter Property="BorderBrush" Value="{StaticResource StateOk}"/>
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </Border.Style>
+                                                        <StackPanel>
+                                                            <Image Source="{Binding ImagePath}" Width="64" Height="48"
+                                                                   Stretch="UniformToFill"
+                                                                   RenderOptions.BitmapScalingMode="HighQuality"/>
+                                                            <TextBlock Text="{Binding Display}"
+                                                                       Foreground="{StaticResource TextSecond}"
+                                                                       FontSize="10" HorizontalAlignment="Center"/>
+                                                        </StackPanel>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </ScrollViewer>
+
+                                <!--
+                                    动作置信度 Top3（学参考界面）：回答"系统现在认为人在做哪一步"。
+                                    比单个 OK/NG 更能让人判断识别靠不靠谱。
+                                    放在第二行而不是第一行：第一行按钮已经排满，塞进去会被裁掉。
+                                -->
+                                <StackPanel Grid.Column="3" VerticalAlignment="Top"
+                                            Margin="14,2,0,0" MinWidth="210">
+                                    <TextBlock Text="动作置信度 Top3" Foreground="{StaticResource TextSecond}"
+                                               FontSize="10" Margin="0,0,0,2"/>
+                                    <ItemsControl ItemsSource="{Binding ActionRanking}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Grid Margin="0,1,0,0">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="14"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="52"/>
+                                                        <ColumnDefinition Width="36"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Grid.Column="0" Text="{Binding Rank}"
+                                                               Foreground="{StaticResource TextMuted}" FontSize="10"
+                                                               VerticalAlignment="Center"/>
+                                                    <TextBlock Grid.Column="1" Text="{Binding Name}"
+                                                               Foreground="{StaticResource TextPrimary}" FontSize="10"
+                                                               TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                                                    <ProgressBar Grid.Column="2" Height="5" Minimum="0" Maximum="1"
+                                                                 Value="{Binding Confidence, Mode=OneWay}"
+                                                                 Background="{StaticResource BgPanel}"
+                                                                 Foreground="{StaticResource AccentCyan}"
+                                                                 VerticalAlignment="Center" Margin="2,0"/>
+                                                    <TextBlock Grid.Column="3" Text="{Binding ConfidenceText}"
+                                                               Foreground="{StaticResource TextAccent}" FontSize="10"
+                                                               HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+                            </Grid>
+
+                            <!--
+                                ===== AI 自主学习 =====
+                                两条腿：① 系统有把握时自动把这一帧收成样本（正常生产即教材）；
+                                ② 人发现它判错了，点一下「其实是对的 / 其实是错的」当场纠正。
+                                右边的三个回滚按钮（撤销/清空/固化）是给班组长用的：
+                                自学万一学歪了，必须能一键退回去 —— 不能退的自动化现场不敢用。
+                            -->
+                            <Border Grid.Row="2" Background="{StaticResource BgPanel}"
+                                    BorderBrush="{StaticResource BorderSoft}" BorderThickness="1"
+                                    CornerRadius="5" Padding="8,6" Margin="0,8,0,0">
+                                <StackPanel>
+                                    <WrapPanel>
+                                        <TextBlock Text="🤖 AI 自主学习"
+                                                   Foreground="{StaticResource TextPrimary}"
+                                                   FontSize="11" FontWeight="SemiBold"
+                                                   VerticalAlignment="Center" Margin="0,0,8,4"/>
+
+                                        <Button Style="{StaticResource ToolButton}"
+                                                Content="{Binding SelfLearnToggleText}"
+                                                Command="{Binding ToggleSelfLearningCommand}"
+                                                Padding="8,3" FontSize="10" Margin="0,0,8,4"
+                                                ToolTip="关掉之后一帧都不收，行为和以前完全一样（已经收到的样本还继续用于识别）"/>
+
+                                        <CheckBox Content="自动收 OK" IsChecked="{Binding SelfLearnAutoOkEnabled}"
+                                                  Foreground="{StaticResource TextPrimary}" FontSize="10"
+                                                  VerticalAlignment="Center" Margin="0,0,10,4"
+                                                  ToolTip="系统判 OK 而且有把握、这一步又确实完成 → 自动把这一帧收成 OK 样本（正常生产就是教材）"/>
+
+                                        <CheckBox Content="自动收 NG（慎用）" IsChecked="{Binding SelfLearnAutoNgEnabled}"
+                                                  Foreground="{StaticResource TextPrimary}" FontSize="10"
+                                                  VerticalAlignment="Center" Margin="0,0,10,4"
+                                                  ToolTip="默认关：万一系统误报一次 NG，学进去就再也洗不掉。确认这批 NG 是真的再打开"/>
+
+                                        <TextBlock Text="把握门槛" Foreground="{StaticResource TextMuted}"
+                                                   FontSize="10" VerticalAlignment="Center" Margin="0,0,4,4"/>
+                                        <TextBox Style="{StaticResource DarkInput}" Width="46" Margin="0,0,10,4"
+                                                 Text="{Binding SelfLearnMinConfidence, UpdateSourceTrigger=LostFocus}"
+                                                 ToolTip="0.5~0.99。低于它的帧一律不学 —— 只从有把握的帧里学，这是防越学越错的第一道闸"/>
+
+                                        <TextBlock Text="每类上限" Foreground="{StaticResource TextMuted}"
+                                                   FontSize="10" VerticalAlignment="Center" Margin="0,0,4,4"/>
+                                        <TextBox Style="{StaticResource DarkInput}" Width="42" Margin="0,0,10,4"
+                                                 Text="{Binding SelfLearnMaxPerClass, UpdateSourceTrigger=LostFocus}"
+                                                 ToolTip="每个框、每类最多留多少条自学样本。到顶后自动淘汰最冗余的那条，样本库不会无限长大"/>
+
+                                        <Button Style="{StaticResource ToolButton}" Content="↩ 撤销上次"
+                                                Command="{Binding UndoLastAutoSampleCommand}"
+                                                Padding="8,3" FontSize="10" Margin="0,0,4,4"
+                                                ToolTip="撤销刚学进来的一条（只撤自学的，人工教的样本不会被动）"/>
+                                        <Button Style="{StaticResource ToolButton}" Content="🧹 清空自学"
+                                                Command="{Binding ClearAutoSamplesCommand}"
+                                                Padding="8,3" FontSize="10" Margin="0,0,4,4"
+                                                ToolTip="换产品/换工装后清掉自学的样本，重新学一遍。人工教的样本保留"/>
+                                        <Button Style="{StaticResource ToolButton}" Content="📌 固化"
+                                                Command="{Binding FreezeAutoSamplesCommand}"
+                                                Padding="8,3" FontSize="10" Margin="0,0,4,4"
+                                                ToolTip="把当前自学样本升级成人工样本：以后系统再也不会自动淘汰它们"/>
+                                        <Button Style="{StaticResource ToolButton}" Content="📂 自学账本"
+                                                Command="{Binding OpenLearningFolderCommand}"
+                                                Padding="8,3" FontSize="10" Margin="0,0,12,4"
+                                                ToolTip="打开 data\learning\ 目录：什么时候学了什么、为什么没学，全都在里面"/>
+
+                                        <!--
+                                            误检修正（学基恩士的 Adjustment Navigation）：
+                                            系统判错了，人一句话纠正，当时那一帧立刻变成最权威的样本。
+                                            这两个按钮抓的都是"此刻这一帧"，标签由人指定，不受任何门槛限制。
+                                        -->
+                                        <Button Style="{StaticResource PrimaryButton}" Content="✅ 其实是对的"
+                                                Command="{Binding MarkRoiCorrectOkCommand}"
+                                                Padding="8,3" FontSize="10" Margin="0,0,4,4"
+                                                ToolTip="对着当前选中的框：刚才那一帧其实是对的 → 直接记成 OK 纠错样本"/>
+                                        <Button Style="{StaticResource DangerButton}" Content="❌ 其实是错的"
+                                                Command="{Binding MarkRoiCorrectNgCommand}"
+                                                Padding="8,3" FontSize="10" Margin="0,0,4,4"
+                                                ToolTip="对着当前选中的框：刚才那一帧其实是错的 → 直接记成 NG 纠错样本"/>
+                                    </WrapPanel>
+
+                                    <TextBlock Text="{Binding SelfLearnStatsText}"
+                                               Foreground="{StaticResource TextSecond}"
+                                               FontSize="10" Margin="0,2,0,0" TextWrapping="Wrap"/>
+                                    <TextBlock Text="{Binding SelfLearnAdviceText}"
+                                               Foreground="{StaticResource TextAccent}"
+                                               FontSize="10" Margin="0,2,0,0" TextWrapping="Wrap"/>
+                                    <TextBlock Text="{Binding SelfLearnLastReasonText}"
+                                               Foreground="{StaticResource TextMuted}"
+                                               FontSize="10" Margin="0,2,0,0" TextWrapping="Wrap"/>
+                                </StackPanel>
+                            </Border>
+
+                            <TextBlock Grid.Row="3" Text="{Binding RoiLearnHint}"
+                                       Foreground="{StaticResource TextMuted}"
+                                       FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                        </Grid>
+                    </Border>
+                </Grid>
+            </Border>
+
+            <!-- ============ 右侧：SOP + 参数 + 状态 ============ -->
+            <Grid Grid.Column="4">
+                <!--
+                    右侧只留两张卡（按现场要求取消了"工序/动态参数/系统状态"三张空卡）：
+                      过程监测 · 手部动作   |   当前工序
+                    省下来的高度全给这两张卡，原来被裁掉的标题和按钮就都露出来了。
+                    工序列表（框位条）、动态参数（配方管理页）、启动/重置/大屏（顶部工具条）
+                    都还在，只是换到了更顺手的位置。
+                -->
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="1.2*"/>
+                    <RowDefinition Height="10"/>
+                    <RowDefinition Height="2.8*"/>
+                </Grid.RowDefinitions>
+
+                <!-- 右上：过程层监测（手部动作合规，方案 v9） -->
+                <Border Grid.Row="0" Style="{StaticResource CardBorder}" Padding="14">
+                    <!-- 套一层滚动：卡片内容多，窗口矮的时候也不会把标题和按钮裁掉 -->
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <DockPanel LastChildFill="True">
+                        <!--
+                            标题和按钮分两行 + 按钮用 WrapPanel：
+                            原来标题和两个按钮挤在一行，右边栏一窄就把按钮挤没了
+                            （现场反馈过"一键演示按钮不见了"）。换行布局下无论窗口多窄都看得见。
+                        -->
+                        <StackPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+                            <TextBlock Text="过程监测 · 手部动作"
+                                       Foreground="{StaticResource TextPrimary}"
+                                       FontSize="14" FontWeight="SemiBold"/>
+                            <WrapPanel Margin="0,6,0,0">
+                                <Button Style="{StaticResource PrimaryButton}"
+                                        Content="{Binding DemoButtonText}"
+                                        Command="{Binding RunDemoCommand}"
+                                        Margin="0,0,6,6" Padding="12,5" FontSize="11"
+                                        ToolTip="自动建图 → 模拟抓两个东西 → 跑判定 → 反例（漏抓），一步步出中文结果"/>
+                                <Button Style="{StaticResource ToolButton}"
+                                        Content="{Binding ProcessMonitorButtonText}"
+                                        Command="{Binding ToggleProcessMonitorCommand}"
+                                        Margin="0,0,0,6" Padding="12,5" FontSize="11"
+                                        ToolTip="模拟一只能标准作业的假手依次经过每个作业位 —— 演示规则引擎，不是真实识别"/>
+                            </WrapPanel>
+                        </StackPanel>
+
+                        <!-- 演示小结：贴底显示，不占上面的位置 -->
+                        <Border DockPanel.Dock="Bottom" Background="{StaticResource BgPanelDeep}" CornerRadius="4"
+                                Padding="8,6" Margin="0,6,0,0" MaxHeight="130">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                <TextBlock Text="{Binding DemoSummary}"
+                                           Foreground="{StaticResource TextSecond}"
+                                           FontFamily="{StaticResource MonoFont}"
+                                           FontSize="12" TextWrapping="Wrap"/>
+                            </ScrollViewer>
+                        </Border>
+
+                        <TextBlock DockPanel.Dock="Top" Text="{Binding ProcessRuleSummary}"
+                                   Foreground="{StaticResource TextSecond}" FontSize="11"
+                                   TextWrapping="Wrap" Margin="0,0,0,2"/>
+                        <TextBlock DockPanel.Dock="Top" Text="{Binding ProcessStatusText}"
+                                   Foreground="{StaticResource TextMuted}" FontSize="11"
+                                   TextWrapping="Wrap" Margin="0,0,0,8"/>
+
+                        <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap"
+                                   Foreground="{StaticResource StateWarn}" FontSize="11"
+                                   Margin="0,0,0,8"
+                                   Text="注意：这一块是「模拟演示」—— 一只能标准作业的假手会依次经过每个作业位，所以会全部判 OK，它演示的是规则引擎能不能拦住跳步/漏装。真实判定请看画面下方的「区域学习」（按框教 OK / NG）。"/>
+
+                        <!--
+                            动作教示 · 自动识别（现场用法：不画框，直接教）
+                            员工在镜头下作业 → 工程师看着画面点「记 OK」或「记 NG」→ 之后自动识别。
+                        -->
+                        <Border DockPanel.Dock="Top" Background="{StaticResource BgPanelDeep}"
+                                CornerRadius="6" Padding="10,8" Margin="0,0,0,8"
+                                BorderThickness="1"
+                                BorderBrush="{Binding RecognizedStateKey, Converter={StaticResource StateKeyToBrush}}">
+                            <StackPanel>
+                                <Grid>
+                                    <TextBlock Text="识别结果" Foreground="{StaticResource TextSecond}"
+                                               FontSize="11" VerticalAlignment="Center"/>
+                                    <TextBlock Text="{Binding RecognizedConfidenceText}"
+                                               Foreground="{StaticResource TextAccent}"
+                                               FontSize="13" FontWeight="Bold"
+                                               HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                </Grid>
+                                <TextBlock Text="{Binding RecognizedText}"
+                                           Foreground="{StaticResource TextPrimary}"
+                                           FontSize="20" FontWeight="Bold" Margin="0,2,0,0"/>
+                                <ProgressBar Height="6" Minimum="0" Maximum="1"
+                                             Value="{Binding RecognizedConfidence, Mode=OneWay}"
+                                             Background="{StaticResource BgPanel}"
+                                             Foreground="{StaticResource AccentCyan}"
+                                             Margin="0,6,0,4"/>
+                                <TextBlock Text="{Binding RecognizedHint}"
+                                           Foreground="{StaticResource TextSecond}"
+                                           FontSize="11" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </Border>
+
+                        <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,6">
+                            <Button Style="{StaticResource PrimaryButton}" Content="记 OK"
+                                    Command="{Binding CaptureOkSampleCommand}" Margin="0,0,6,6"/>
+                            <Button Style="{StaticResource DangerButton}" Content="记 NG"
+                                    Command="{Binding CaptureNgSampleCommand}" Margin="0,0,6,6"/>
+                            <Button Style="{StaticResource ToolButton}"
+                                    Content="{Binding RecognitionButtonText}"
+                                    Command="{Binding ToggleRecognizeCommand}" Margin="0,0,6,6"/>
+                            <Button Style="{StaticResource ToolButton}" Content="清空样本"
+                                    Command="{Binding ClearSamplesCommand}" Margin="0,0,6,6"/>
+                        </WrapPanel>
+
+                        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
+                            <TextBlock Text="{Binding OkSampleCount, StringFormat=OK 样本 {0} 个}"
+                                       Foreground="{StaticResource StateOk}" FontSize="11"
+                                       VerticalAlignment="Center"/>
+                            <TextBlock Text="{Binding NgSampleCount, StringFormat=NG 样本 {0} 个}"
+                                       Foreground="{StaticResource StateNg}" FontSize="11"
+                                       Margin="10,0,0,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="相似度阈值" Foreground="{StaticResource TextSecond}"
+                                       FontSize="11" Margin="12,0,4,0" VerticalAlignment="Center"/>
+                            <TextBox Style="{StaticResource DarkInput}" Width="54"
+                                     Text="{Binding SimilarityThreshold, UpdateSourceTrigger=PropertyChanged}"
+                                     ToolTip="低于这个相似度就判「无法判定」，宁可让人确认也不乱判"/>
+                        </StackPanel>
+
+                        <!-- 批量仿真：把教示样本用留一法考一遍，出准确率/漏检/误检（方案 10.6 验收线） -->
+                        <StackPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+                            <Button Style="{StaticResource ToolButton}" Content="批量仿真（验收指标）"
+                                    HorizontalAlignment="Left"
+                                    Command="{Binding RunBatchValidationCommand}" Margin="0,0,0,4"/>
+                            <TextBlock Text="{Binding ValidationSummary}"
+                                       Foreground="{StaticResource TextAccent}"
+                                       FontSize="11" TextWrapping="Wrap"/>
+                            <TextBlock Text="{Binding ValidationDetail}"
+                                       Foreground="{StaticResource TextMuted}"
+                                       FontSize="12" TextWrapping="Wrap" Margin="0,2,0,0"/>
+                        </StackPanel>
+
+                        <!-- 当前动作 + 置信度（竞品界面同款：动作名 + 置信度条） -->
+                        <Border DockPanel.Dock="Top" Background="{StaticResource BgPanelDeep}"
+                                CornerRadius="6" Padding="10,8" Margin="0,0,0,8">
+                            <StackPanel>
+                                <Grid>
+                                    <TextBlock Text="当前动作" Foreground="{StaticResource TextSecond}"
+                                               FontSize="11" VerticalAlignment="Center"/>
+                                    <TextBlock Text="{Binding ActionConfidenceText}"
+                                               Foreground="{StaticResource TextAccent}"
+                                               FontSize="13" FontWeight="Bold"
+                                               HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                </Grid>
+                                <TextBlock Text="{Binding CurrentActionName}"
+                                           Foreground="{StaticResource TextPrimary}"
+                                           FontSize="16" FontWeight="Bold"
+                                           TextWrapping="Wrap" Margin="0,2,0,0"/>
+                                <ProgressBar Height="8" Minimum="0" Maximum="1"
+                                             Value="{Binding ActionConfidence, Mode=OneWay}"
+                                             Background="{StaticResource BgPanel}"
+                                             Foreground="{StaticResource AccentCyan}"
+                                             Margin="0,6,0,4"/>
+                                <TextBlock Text="{Binding CurrentActionHint}"
+                                           Foreground="{StaticResource TextSecond}"
+                                           FontSize="11" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- 作业位三态：绿=已到位 / 橙=等待中 / 灰=未执行 -->
+                        <ItemsControl DockPanel.Dock="Top" ItemsSource="{Binding ProcessTargetStates}"
+                                      Margin="0,0,0,6">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <WrapPanel/>
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Margin="0,0,6,6" CornerRadius="3" Padding="8,4"
+                                            Background="{Binding StateKey, Converter={StaticResource StateKeyToBg}}"
+                                            BorderBrush="{Binding StateKey, Converter={StaticResource StateKeyToBrush}}"
+                                            BorderThickness="1">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="{Binding Display}"
+                                                       Foreground="{StaticResource TextPrimary}" FontSize="11"/>
+                                            <TextBlock Text="{Binding StateText}"
+                                                       Foreground="{StaticResource TextSecond}" FontSize="11"
+                                                       Margin="6,0,0,0"/>
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,6,0,0">
+                            <Button Style="{StaticResource ToolButton}" Content="清空违规"
+                                    Command="{Binding ClearProcessViolationsCommand}" Margin="0,0,6,0"/>
+                            <Button Style="{StaticResource ToolButton}" Content="导出规则 YAML"
+                                    Command="{Binding ExportProcessRuleCommand}"/>
+                        </StackPanel>
+
+                        <!-- 异常列表：点一条 → 下方调出那一刻的抓帧图（基恩士式回看） -->
+                        <ListBox DockPanel.Dock="Top"
+                                 ItemsSource="{Binding ProcessViolations}"
+                                 SelectedItem="{Binding SelectedViolation}"
+                                 ItemContainerStyle="{StaticResource DarkListItem}"
+                                 Background="{StaticResource BgPanelDeep}"
+                                 BorderThickness="0" MaxHeight="92"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding Display}"
+                                               Foreground="{StaticResource TextSecond}"
+                                               FontSize="11" TextWrapping="Wrap"/>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+
+                        <!-- NG 保持图（最多 3 张，点异常条目切换） -->
+                        <Border Background="{StaticResource BgPanelDeep}" CornerRadius="4"
+                                Padding="6" Margin="0,6,0,0" MinHeight="120">
+                            <Grid>
+                                <TextBlock Text="{Binding EvidenceHint}"
+                                           Foreground="{StaticResource TextMuted}"
+                                           FontSize="11" TextWrapping="Wrap"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                                           TextAlignment="Center" Margin="12"/>
+                                <Image Source="{Binding SelectedEvidenceImage}"
+                                       Stretch="Uniform" MaxHeight="200"
+                                       RenderOptions.BitmapScalingMode="HighQuality"/>
+                            </Grid>
+                        </Border>
+                    </DockPanel>
+                    </ScrollViewer>
+                </Border>
+
+                <!-- 右上：当前工序监测面板（操作员首页核心） -->
+                <Border Grid.Row="2" Style="{StaticResource CardBorder}" Padding="14">
+                    <!-- 同上：内容多，套滚动避免被裁 -->
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <StackPanel>
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="当前工序"
+                                       Foreground="{StaticResource TextPrimary}"
+                                       FontSize="13" FontWeight="SemiBold"/>
+                            <TextBlock Grid.Column="2" Text="{Binding StepTitle}"
+                                       Foreground="{StaticResource TextAccent}"
+                                       FontSize="11" FontWeight="SemiBold"
+                                       VerticalAlignment="Center"/>
+                        </Grid>
+
+                        <!-- 大号作业指引：现场离屏幕两米也要看得清 -->
+                        <Border Background="{StaticResource BgPanelDeep}"
+                                CornerRadius="6" Padding="10,8" BorderThickness="1"
+                                BorderBrush="{Binding StepStateKey, Converter={StaticResource StateKeyToBrush}}">
+                            <DockPanel>
+                                <Border DockPanel.Dock="Left" Width="5" CornerRadius="3" Margin="0,0,10,0"
+                                        Background="{Binding StepStateKey, Converter={StaticResource StateKeyToBrush}}"/>
+                                <StackPanel>
+                                    <TextBlock Text="{Binding StepName}"
+                                               Foreground="{StaticResource TextPrimary}"
+                                               FontSize="16" FontWeight="Bold" TextWrapping="Wrap"/>
+                                    <TextBlock Text="{Binding StepHintText}"
+                                               Foreground="{StaticResource TextSecond}"
+                                               FontSize="11" TextWrapping="Wrap" Margin="0,3,0,0"/>
+                                </StackPanel>
+                            </DockPanel>
+                        </Border>
+
+                        <!-- 动作计时挪到首页最下面那一行（右侧栏太挤，挤过一次按钮了） -->
+
+                        <!-- 实时统计 -->
+                        <UniformGrid Columns="4" Margin="0,8,0,0">
+                            <StackPanel>
+                                <TextBlock Text="OK" Foreground="{StaticResource TextSecond}"
+                                           FontSize="10" HorizontalAlignment="Center"/>
+                                <TextBlock Text="{Binding OkCount}" Foreground="{StaticResource StateOk}"
+                                           FontSize="15" FontWeight="Bold" HorizontalAlignment="Center"/>
+                            </StackPanel>
+                            <StackPanel>
+                                <TextBlock Text="NG" Foreground="{StaticResource TextSecond}"
+                                           FontSize="10" HorizontalAlignment="Center"/>
+                                <TextBlock Text="{Binding NgCount}" Foreground="{StaticResource StateNg}"
+                                           FontSize="15" FontWeight="Bold" HorizontalAlignment="Center"/>
+                            </StackPanel>
+                            <StackPanel>
+                                <TextBlock Text="合格率" Foreground="{StaticResource TextSecond}"
+                                           FontSize="10" HorizontalAlignment="Center"/>
+                                <TextBlock Text="{Binding YieldText}" Foreground="{StaticResource TextAccent}"
+                                           FontSize="15" FontWeight="Bold" HorizontalAlignment="Center"/>
+                            </StackPanel>
+                            <StackPanel>
+                                <TextBlock Text="完成件数" Foreground="{StaticResource TextSecond}"
+                                           FontSize="10" HorizontalAlignment="Center"/>
+                                <TextBlock Text="{Binding CompletedPieces}" Foreground="{StaticResource TextPrimary}"
+                                           FontSize="15" FontWeight="Bold" HorizontalAlignment="Center"/>
+                            </StackPanel>
+                        </UniformGrid>
+
+                        <!-- 本次判定 -->
+                        <Border Background="{StaticResource BgPanel}" CornerRadius="4" Padding="8,6" Margin="0,8,0,0"
+                                BorderThickness="1"
+                                BorderBrush="{Binding VerdictStateKey, Converter={StaticResource StateKeyToBrush}}">
+                            <StackPanel>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="判定 " Foreground="{StaticResource TextSecond}"
+                                               FontSize="10" VerticalAlignment="Center"/>
+                                    <TextBlock Text="{Binding VerdictText}"
+                                               Foreground="{Binding VerdictStateKey, Converter={StaticResource StateKeyToBrush}}"
+                                               FontSize="13" FontWeight="Bold" VerticalAlignment="Center"/>
+                                </StackPanel>
+                                <TextBlock Text="{Binding JudgementReason}" Foreground="{StaticResource TextSecond}"
+                                           FontSize="10" TextWrapping="Wrap" Margin="0,3,0,0"/>
+                                <TextBlock Text="{Binding OutcomeText}" Foreground="{StaticResource TextAccent}"
+                                           FontSize="10" TextWrapping="Wrap" Margin="0,3,0,0"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- 测试逻辑：模拟人工动作（没有产线也能验证监测逻辑） -->
+                        <TextBlock Text="模拟人工动作（测试用）" Foreground="{StaticResource TextPrimary}"
+                                   FontSize="11" FontWeight="SemiBold" Margin="0,8,0,4"/>
+                        <WrapPanel>
+                            <Button Style="{StaticResource PrimaryButton}" Content="规范动作"
+                                    Command="{Binding SimulateCorrectStepCommand}"
+                                    FontSize="11" Padding="10,4" Margin="0,0,5,5"/>
+                            <Button Style="{StaticResource ToolButton}" Content="跳步"
+                                    Command="{Binding SimulateSkipStepCommand}"
+                                    FontSize="11" Padding="10,4" Margin="0,0,5,5"/>
+                            <Button Style="{StaticResource ToolButton}" Content="漏装"
+                                    Command="{Binding SimulateNoActionCommand}"
+                                    FontSize="11" Padding="10,4" Margin="0,0,5,5"/>
+                            <Button Style="{StaticResource ToolButton}" Content="重复触发"
+                                    Command="{Binding SimulateRepeatCommand}"
+                                    FontSize="11" Padding="10,4" Margin="0,0,5,5"/>
+                        </WrapPanel>
+                        <TextBlock Text="{Binding LastActionText}" Foreground="{StaticResource TextMuted}"
+                                   FontSize="10" TextWrapping="Wrap"/>
+                        <TextBlock Text="{Binding SimulatorProgressText}" Foreground="{StaticResource TextMuted}"
+                                   FontSize="10" Margin="0,2,0,0"/>
+
+                        <!-- 过程数据：ROI 占用率、违规次数等 -->
+                        <TextBlock Text="过程数据" Foreground="{StaticResource TextPrimary}"
+                                   FontSize="11" FontWeight="SemiBold" Margin="0,8,0,4"/>
+                        <ScrollViewer MaxHeight="40" VerticalScrollBarVisibility="Auto">
+                            <ItemsControl ItemsSource="{Binding MeasurementLines}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding}" Foreground="{StaticResource TextSecond}"
+                                                   FontFamily="{StaticResource MonoFont}"
+                                                   FontSize="10" TextWrapping="Wrap"/>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </StackPanel>
+                    </ScrollViewer>
+                </Border>
+
+            </Grid>
+
+            <!--
+                ===== 现场状态栏（画面右边那一栏，竖排）=====
+                工单号 / 产品型号 / SOP 版本 / 步骤进度 / 合规率 / 节拍时间 / 工位状态 / 今日告警 / 今日漏步
+                + 动作计时（本步已用时 / 快慢 / 上次用时 / 件号）
+                原来是画面下面横铺一整条，按要求挪到画面右侧竖排，和画面并列显示。
+            -->
+            <Border Grid.Row="0" Grid.Column="2"
+                    Style="{StaticResource CardBorder}" Padding="10,8" Margin="0"
+                    ToolTip="计时基准优先取「上一次做同一动作」的用时；没有上次才用「⚙ 时间设置」里的标准工时。慢 30% 以上标红。">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- 第一行：一眼看全场（现在竖排：这一栏比画面窄） -->
+                    <UniformGrid Grid.Row="0" Columns="1">
+                    <StackPanel Margin="0,0,6,0">
+                        <TextBlock Text="工单号" Foreground="{StaticResource TextSecond}" FontSize="10"/>
+                        <TextBlock Text="{Binding WorkOrderText}" Foreground="{StaticResource TextPrimary}"
+                                   FontFamily="{StaticResource MonoFont}" FontSize="12" FontWeight="SemiBold"
+                                   Margin="0,2,0,0" TextTrimming="CharacterEllipsis"/>
+                    </StackPanel>
+                    <StackPanel Margin="0,0,6,0">
+                        <TextBlock Text="产品型号" Foreground="{StaticResource TextSecond}" FontSize="10"/>
+                        <TextBlock Text="{Binding ModelText}" Foreground="{StaticResource TextPrimary}"
+                                   FontFamily="{StaticResource MonoFont}" FontSize="12" FontWeight="SemiBold"
+                                   Margin="0,2,0,0" TextTrimming="CharacterEllipsis"/>
+                    </StackPanel>
+                    <StackPanel Margin="0,0,6,0">
+                        <TextBlock Text="SOP 版本" Foreground="{StaticResource TextSecond}" FontSize="10"/>
+                        <TextBlock Text="{Binding SopVersionText}" Foreground="{StaticResource TextPrimary}"
+                                   FontFamily="{StaticResource MonoFont}" FontSize="12" FontWeight="SemiBold"
+                                   Margin="0,2,0,0" TextTrimming="CharacterEllipsis"/>
+                    </StackPanel>
+                    <StackPanel Margin="0,0,6,0">
+                        <TextBlock Text="步骤进度" Foreground="{StaticResource TextSecond}" FontSize="10"/>
+                        <TextBlock Text="{Binding StepProgressText}" Foreground="{StaticResource AccentCyan}"
+                                   FontFamily="{StaticResource MonoFont}" FontSize="13" FontWeight="Bold"
+                                   Margin="0,2,0,0"/>
+                    </StackPanel>
+                    <StackPanel Margin="0,0,6,0">
+                        <TextBlock Text="合规率" Foreground="{StaticResource TextSecond}" FontSize="10"/>
+                        <TextBlock Text="{Binding ComplianceRateText}" Foreground="{StaticResource StateWarn}"
+                                   FontFamily="{StaticResource MonoFont}" FontSize="13" FontWeight="Bold"
+                                   Margin="0,2,0,0"/>
+                    </StackPanel>
+                    <StackPanel Margin="0,0,6,0">
+                        <TextBlock Text="节拍时间" Foreground="{StaticResource TextSecond}" FontSize="10"/>
+                        <TextBlock Text="{Binding CycleTimeText}" Foreground="{StaticResource TextPrimary}"
+                                   FontFamily="{StaticResource MonoFont}" FontSize="13" FontWeight="Bold"
+                                   Margin="0,2,0,0" ToolTip="{Binding CycleTimeHint}"/>
+                    </StackPanel>
+                    <StackPanel Margin="0,0,6,0">
+                        <TextBlock Text="工位状态" Foreground="{StaticResource TextSecond}" FontSize="10"/>
+                        <TextBlock Text="{Binding StationStateText}"
+                                   Foreground="{Binding StationStateKey, Converter={StaticResource StateKeyToBrush}}"
+                                   FontFamily="{StaticResource MonoFont}" FontSize="13" FontWeight="Bold"
+                                   Margin="0,2,0,0"/>
+                    </StackPanel>
+                    <StackPanel Margin="0,0,6,0">
+                        <TextBlock Text="今日告警" Foreground="{StaticResource TextSecond}" FontSize="10"/>
+                        <TextBlock Text="{Binding TodayAlarmCountText}" Foreground="{StaticResource TextPrimary}"
+                                   FontFamily="{StaticResource MonoFont}" FontSize="13" FontWeight="Bold"
+                                   Margin="0,2,0,0"/>
+                    </StackPanel>
+                    <StackPanel>
+                        <TextBlock Text="今日漏步" Foreground="{StaticResource TextSecond}" FontSize="10"/>
+                        <TextBlock Text="{Binding TodaySkippedCountText}" Foreground="{StaticResource TextPrimary}"
+                                   FontFamily="{StaticResource MonoFont}" FontSize="13" FontWeight="Bold"
+                                   Margin="0,2,0,0"/>
+                    </StackPanel>
+                    </UniformGrid>
+
+                    <!--
+                        第二行：动作计时（本步已用时 / 基准 / 上次 / 快慢 / 件号 + 两个窗口入口）。
+                        放在底部这一行而不是右侧栏：现场眼睛就在屏幕上，越大越容易看；
+                        右侧栏空间有限，塞进去会把别的按钮挤掉（已经挤掉过一次）。
+                    -->
+                    <Border Grid.Row="1" CornerRadius="6" Padding="12,8" Margin="0,10,0,0"
+                            Background="{StaticResource BgPanelDeep}"
+                            BorderThickness="1"
+                            BorderBrush="{Binding LastActionPaceStateKey, Converter={StaticResource StateKeyToBrush}}">
+                        <!-- 竖排：这一栏比画面窄，横着排会被裁掉 -->
+                        <StackPanel>
+                            <StackPanel Margin="0,0,0,6">
+                                <TextBlock Text="本步已用时" Foreground="{StaticResource TextSecond}" FontSize="10"/>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="{Binding CurrentActionElapsedText}"
+                                               Foreground="{StaticResource TextAccent}"
+                                               FontSize="20" FontWeight="Bold" VerticalAlignment="Center"/>
+                                </StackPanel>
+                                <TextBlock Text="{Binding CurrentActionBaselineText}"
+                                           Foreground="{StaticResource TextSecond}"
+                                           FontSize="10" TextWrapping="Wrap" Margin="0,2,0,0"/>
+                            </StackPanel>
+
+                            <TextBlock Text="{Binding LastActionPaceText}"
+                                       Foreground="{Binding LastActionPaceStateKey, Converter={StaticResource StateKeyToBrush}}"
+                                       FontSize="13" FontWeight="Bold" TextWrapping="Wrap"/>
+
+                            <!-- 原来这里有三行长说明，改成卡片上的悬停提示（ToolTip），省下约 45px -->
+                            <StackPanel Margin="0,8,0,0">
+                                <TextBlock Text="上次用时" Foreground="{StaticResource TextSecond}" FontSize="10"/>
+                                <TextBlock Text="{Binding LastActionTimeText}"
+                                           Foreground="{StaticResource TextPrimary}"
+                                           FontFamily="{StaticResource MonoFont}"
+                                           FontSize="12" FontWeight="SemiBold"/>
+                            </StackPanel>
+
+                            <StackPanel Margin="0,6,0,0">
+                                <TextBlock Text="当前件号" Foreground="{StaticResource TextSecond}" FontSize="10"/>
+                                <TextBlock Text="{Binding PieceText}"
+                                           Foreground="{StaticResource TextPrimary}"
+                                           FontFamily="{StaticResource MonoFont}"
+                                           FontSize="12" FontWeight="SemiBold"/>
+                            </StackPanel>
+
+                            <WrapPanel Margin="0,10,0,0">
+                                <Button Style="{StaticResource ToolButton}" Content="⏱ 动作时间回看"
+                                        Click="OnOpenTimingReview" Padding="10,5" FontSize="11"
+                                        Margin="0,0,6,6"
+                                        ToolTip="按日期/工序查询每个人的动作时间，看趋势图和工序耗时排行"/>
+                                <Button Style="{StaticResource ToolButton}" Content="⚙ 时间设置"
+                                        Click="OnOpenTimingSettings" Padding="10,5" FontSize="11" Margin="0,0,0,6"
+                                        ToolTip="设置每道工序的标准工时、是否记录、慢多少算偏慢"/>
+                            </WrapPanel>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </Border>
+            </Grid>
+
+            <!-- ==================== 页面 2：配方管理 ==================== -->
+            <Grid Visibility="{Binding SelectedPageIndex, Converter={StaticResource IndexToVisibility}, ConverterParameter=1}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="320"/>
+                    <ColumnDefinition Width="12"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- 左：配方列表 -->
+                <Border Grid.Column="0" Style="{StaticResource CardBorder}" Padding="14">
+                    <DockPanel LastChildFill="True">
+                        <Grid DockPanel.Dock="Top" Margin="0,0,0,10">
+                            <TextBlock Text="检测配方" Foreground="{StaticResource TextPrimary}"
+                                       FontSize="14" FontWeight="SemiBold"/>
+                            <TextBlock Text="{Binding RecipeList.Count, StringFormat=（{0} 个）}"
+                                       Foreground="{StaticResource TextSecond}" FontSize="11"
+                                       HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                        </Grid>
+
+                        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,10,0,0">
+                            <Button Style="{StaticResource PrimaryButton}" Content="新建配方"
+                                    Command="{Binding NewRecipeCommand}" Margin="0,0,6,0"/>
+                            <Button Style="{StaticResource ToolButton}" Content="保存"
+                                    Command="{Binding SaveRecipeCommand}" Margin="0,0,6,0"/>
+                            <Button Style="{StaticResource ToolButton}" Content="删除"
+                                    Command="{Binding DeleteRecipeCommand}"/>
+                        </StackPanel>
+
+                        <ListBox ItemsSource="{Binding RecipeList}"
+                                 SelectedItem="{Binding ActiveRecipe}"
+                                 Background="{StaticResource BgPanelDeep}"
+                                 BorderThickness="0"
+                                 Foreground="{StaticResource TextPrimary}">
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem">
+                                    <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+                                    <Setter Property="Background" Value="Transparent"/>
+                                    <Setter Property="Padding"    Value="8,6"/>
+                                    <Setter Property="Template">
+                                        <Setter.Value>
+                                            <ControlTemplate TargetType="ListBoxItem">
+                                                <Border x:Name="bd"
+                                                        Background="{TemplateBinding Background}"
+                                                        CornerRadius="4"
+                                                        Margin="0,0,0,2"
+                                                        Padding="{TemplateBinding Padding}">
+                                                    <ContentPresenter/>
+                                                </Border>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter TargetName="bd" Property="Background" Value="#1F2D45"/>
+                                                    </Trigger>
+                                                    <Trigger Property="IsSelected" Value="True">
+                                                        <Setter TargetName="bd" Property="Background" Value="#243A5E"/>
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+                                </Style>
+                            </ListBox.ItemContainerStyle>
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Margin="2,4">
+                                        <TextBlock Text="{Binding Name}" Foreground="{StaticResource TextPrimary}"
+                                                   FontSize="13" TextWrapping="Wrap"/>
+                                        <TextBlock Text="{Binding ProductModel}" Foreground="{StaticResource TextSecond}"
+                                                   FontSize="11"/>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </DockPanel>
+                </Border>
+
+                <!-- 右：配方编辑 -->
+                <Border Grid.Column="2" Style="{StaticResource CardBorder}" Padding="14"
+                        IsEnabled="{Binding CanTuneRecipe}">
+                    <DockPanel LastChildFill="True">
+                        <TextBlock DockPanel.Dock="Top" Text="配方编辑"
+                                   Foreground="{StaticResource TextPrimary}"
+                                   FontSize="14" FontWeight="SemiBold" Margin="0,0,0,10"/>
+
+                        <TextBlock DockPanel.Dock="Top" Text="{Binding RolePermissionText}"
+                                   Foreground="{StaticResource TextMuted}" FontSize="11"
+                                   TextWrapping="Wrap" Margin="0,0,0,6"/>
+
+                        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,10,0,0">
+                            <Button Style="{StaticResource ToolButton}" Content="🎯 到首页标定 ROI"
+                                    Command="{Binding GoRoiEditCommand}" Margin="0,0,6,0"/>
+                            <TextBlock Text="ROI 顺序 = 工序顺序：第 1 个框就是第 1 道工序"
+                                       Foreground="{StaticResource TextMuted}" FontSize="11"
+                                       VerticalAlignment="Center"/>
+                        </StackPanel>
+
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <StackPanel>
+                                <Grid Margin="0,0,0,8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="90"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="配方名称" Foreground="{StaticResource TextSecond}"
+                                               FontSize="12" VerticalAlignment="Center"/>
+                                    <TextBox Grid.Column="1" Style="{StaticResource DarkInput}"
+                                             Text="{Binding ActiveRecipe.Name, UpdateSourceTrigger=PropertyChanged}"/>
+                                </Grid>
+
+                                <Grid Margin="0,0,0,8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="90"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="产品型号" Foreground="{StaticResource TextSecond}"
+                                               FontSize="12" VerticalAlignment="Center"/>
+                                    <TextBox Grid.Column="1" Style="{StaticResource DarkInput}"
+                                             Text="{Binding ActiveRecipe.ProductModel, UpdateSourceTrigger=PropertyChanged}"/>
+                                </Grid>
+
+                                <Grid Margin="0,0,0,8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="90"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="检测算法" Foreground="{StaticResource TextSecond}"
+                                               FontSize="12" VerticalAlignment="Center"/>
+                                    <ComboBox Grid.Column="1" Style="{StaticResource DarkCombo}"
+                                              ItemsSource="{Binding AvailableAlgorithms}"
+                                              DisplayMemberPath="DisplayName"
+                                              SelectedValuePath="Key"
+                                              SelectedValue="{Binding ActiveRecipe.AlgorithmKey}"
+                                              SelectionChanged="OnAlgorithmChanged"/>
+                                </Grid>
+
+                                <Grid Margin="0,0,0,12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="90"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="备注" Foreground="{StaticResource TextSecond}"
+                                               FontSize="12" VerticalAlignment="Center"/>
+                                    <TextBox Grid.Column="1" Style="{StaticResource DarkInput}"
+                                             Text="{Binding ActiveRecipe.Remark, UpdateSourceTrigger=PropertyChanged}"/>
+                                </Grid>
+
+                                <TextBlock Text="ROI 区域" Foreground="{StaticResource TextPrimary}"
+                                           FontSize="12" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                                <ItemsControl ItemsSource="{Binding ActiveRecipe.Rois}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Margin="0,0,0,4">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Text="{Binding Name}" Foreground="{StaticResource TextPrimary}"
+                                                           FontSize="12"/>
+                                                <!-- 坐标文案用模型上的 BoxText 属性：
+                                                     绑定表达式的 StringFormat 值里一旦出现等号，
+                                                     XAML 解析器会把它当成"参数名=值"而编译报错。 -->
+                                                <TextBlock Grid.Column="1" Text="{Binding BoxText}"
+                                                           Foreground="{StaticResource TextMuted}"
+                                                           FontFamily="{StaticResource MonoFont}" FontSize="11"/>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+
+                                <TextBlock Text="算法参数（由算法自己声明，换算法自动换面板）"
+                                           Foreground="{StaticResource TextPrimary}"
+                                           FontSize="12" FontWeight="SemiBold" Margin="0,14,0,6"/>
+                                <ItemsControl ItemsSource="{Binding ParameterFields}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Margin="0,0,0,12">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="150"/>
+                                                </Grid.ColumnDefinitions>
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="Auto"/>
+                                                    <RowDefinition Height="Auto"/>
+                                                </Grid.RowDefinitions>
+
+                                                <StackPanel Grid.Row="0" Grid.Column="0" VerticalAlignment="Center">
+                                                    <TextBlock Text="{Binding DisplayName}"
+                                                               Foreground="{StaticResource TextSecond}"
+                                                               FontSize="13" FontWeight="SemiBold"/>
+                                                    <TextBlock Text="{Binding RangeHint}"
+                                                               Foreground="{StaticResource TextMuted}" FontSize="11"/>
+                                                </StackPanel>
+                                                <TextBox Grid.Row="0" Grid.Column="1" Style="{StaticResource DarkInput}"
+                                                         Text="{Binding Value, UpdateSourceTrigger=PropertyChanged}"
+                                                         ToolTip="{Binding Description}"/>
+
+                                                <!-- 参数说明做成下拉：默认收起，点「▸ 说明」才展开，界面不被撑长 -->
+                                                <StackPanel Grid.Row="1" Grid.ColumnSpan="2" Margin="0,4,0,0"
+                                                            Visibility="{Binding HasDescription, Converter={StaticResource BoolToVisibility}}">
+                                                    <ToggleButton x:Name="ParamHintToggle" Style="{StaticResource HintToggle}"/>
+                                                    <Border Background="{StaticResource BgPanelDeep}" CornerRadius="4"
+                                                            Padding="8,6" Margin="0,4,0,0"
+                                                            Visibility="{Binding IsChecked, ElementName=ParamHintToggle, Converter={StaticResource BoolToVisibility}}">
+                                                        <TextBlock Text="{Binding Description}"
+                                                                   Foreground="{StaticResource TextSecond}"
+                                                                   FontSize="12" TextWrapping="Wrap"/>
+                                                    </Border>
+                                                </StackPanel>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </DockPanel>
+                </Border>
+            </Grid>
+
+            <!-- ==================== 页面 3：历史查询 ==================== -->
+            <Grid Visibility="{Binding SelectedPageIndex, Converter={StaticResource IndexToVisibility}, ConverterParameter=2}">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="10"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <Border Grid.Row="0" Style="{StaticResource CardBorder}" Padding="14">
+                    <StackPanel>
+                        <TextBlock Text="查询条件" Foreground="{StaticResource TextPrimary}"
+                                   FontSize="14" FontWeight="SemiBold"/>
+
+                        <WrapPanel Margin="0,10,0,0">
+                            <StackPanel Orientation="Horizontal" Margin="0,0,14,8">
+                                <TextBlock Text="起始日期" Foreground="{StaticResource TextSecond}"
+                                           FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                <DatePicker SelectedDate="{Binding QueryFrom}" Width="140"/>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,14,8">
+                                <TextBlock Text="截止日期" Foreground="{StaticResource TextSecond}"
+                                           FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                <DatePicker SelectedDate="{Binding QueryTo}" Width="140"/>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,14,8">
+                                <TextBlock Text="批次号" Foreground="{StaticResource TextSecond}"
+                                           FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                <TextBox Style="{StaticResource DarkInput}" Width="130"
+                                         Text="{Binding QueryBatch, UpdateSourceTrigger=PropertyChanged}"/>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,14,8">
+                                <TextBlock Text="产品型号" Foreground="{StaticResource TextSecond}"
+                                           FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                <TextBox Style="{StaticResource DarkInput}" Width="130"
+                                         Text="{Binding QueryModel, UpdateSourceTrigger=PropertyChanged}"/>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,14,8">
+                                <TextBlock Text="结论" Foreground="{StaticResource TextSecond}"
+                                           FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                <ComboBox Style="{StaticResource DarkCombo}" Width="110"
+                                          ItemsSource="{Binding VerdictFilterOptions}"
+                                          SelectedIndex="{Binding QueryVerdictIndex}"/>
+                            </StackPanel>
+                            <Button Style="{StaticResource PrimaryButton}" Content="查询"
+                                    Command="{Binding QueryHistoryCommand}" Margin="0,0,8,8"/>
+                            <Button Style="{StaticResource ToolButton}" Content="导出 CSV"
+                                    Command="{Binding ExportHistoryCommand}" Margin="0,0,0,8"/>
+                        </WrapPanel>
+
+                        <TextBlock Text="{Binding QueryStatus}" Foreground="{StaticResource TextAccent}"
+                                   FontSize="12" Margin="0,4,0,10" TextWrapping="Wrap"/>
+
+                        <UniformGrid Columns="4">
+                            <StackPanel>
+                                <TextBlock Text="总记录" Foreground="{StaticResource TextSecond}"
+                                           FontSize="11" HorizontalAlignment="Center"/>
+                                <TextBlock Text="{Binding QueryTotal}" Foreground="{StaticResource TextPrimary}"
+                                           FontSize="20" FontWeight="Bold" HorizontalAlignment="Center"/>
+                            </StackPanel>
+                            <StackPanel>
+                                <TextBlock Text="OK" Foreground="{StaticResource TextSecond}"
+                                           FontSize="11" HorizontalAlignment="Center"/>
+                                <TextBlock Text="{Binding QueryPass}" Foreground="{StaticResource StateOk}"
+                                           FontSize="20" FontWeight="Bold" HorizontalAlignment="Center"/>
+                            </StackPanel>
+                            <StackPanel>
+                                <TextBlock Text="NG" Foreground="{StaticResource TextSecond}"
+                                           FontSize="11" HorizontalAlignment="Center"/>
+                                <TextBlock Text="{Binding QueryFail}" Foreground="{StaticResource StateNg}"
+                                           FontSize="20" FontWeight="Bold" HorizontalAlignment="Center"/>
+                            </StackPanel>
+                            <StackPanel>
+                                <TextBlock Text="合格率" Foreground="{StaticResource TextSecond}"
+                                           FontSize="11" HorizontalAlignment="Center"/>
+                                <TextBlock Text="{Binding QueryPassRate}" Foreground="{StaticResource TextAccent}"
+                                           FontSize="20" FontWeight="Bold" HorizontalAlignment="Center"/>
+                            </StackPanel>
+                        </UniformGrid>
+                    </StackPanel>
+                </Border>
+
+                <Border Grid.Row="2" Style="{StaticResource CardBorder}">
+                    <DataGrid Style="{StaticResource HistoryDataGrid}"
+                              ItemsSource="{Binding QueryResults}"
+                              Margin="6">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="时间" Width="170"
+                                                Binding="{Binding Timestamp, StringFormat=yyyy-MM-dd HH:mm:ss}"/>
+                            <DataGridTextColumn Header="批次" Width="130" Binding="{Binding BatchNo}"/>
+                            <DataGridTextColumn Header="产品型号" Width="160" Binding="{Binding ProductModel}"/>
+                            <DataGridTextColumn Header="检测配方" Width="180" Binding="{Binding RecipeName}"/>
+                        <DataGridTextColumn Header="结果" Width="90"
+                                            Binding="{Binding Verdict, Converter={StaticResource VerdictToText}}">
+                            <!-- 结果列也上色：OK 绿、NG 红并且加粗，和整行标红呼应 -->
+                            <DataGridTextColumn.ElementStyle>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+                                    <Setter Property="FontWeight" Value="SemiBold"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Verdict}" Value="Fail">
+                                            <Setter Property="Foreground" Value="{StaticResource StateNg}"/>
+                                            <Setter Property="FontWeight" Value="Bold"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding Verdict}" Value="Pass">
+                                            <Setter Property="Foreground" Value="{StaticResource StateOk}"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </DataGridTextColumn.ElementStyle>
+                        </DataGridTextColumn>
+                            <DataGridTextColumn Header="操作员" Width="100" Binding="{Binding Operator}"/>
+                            <DataGridTextColumn Header="用时(ms)" Width="90"
+                                                Binding="{Binding ElapsedMs, StringFormat={}{0:F0}}"/>
+                            <DataGridTextColumn Header="判定说明" Width="*" Binding="{Binding JudgementReason}"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </Border>
+            </Grid>
+
+            <!-- ==================== 页面 4：系统设置 ==================== -->
+            <Grid Visibility="{Binding SelectedPageIndex, Converter={StaticResource IndexToVisibility}, ConverterParameter=3}">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel>
+                        <!--
+                            工位联网 + MES 对接
+                            ── 同一套程序，三种角色：
+                                纯工位：只填"工位编号 + 汇总终端地址"
+                                汇总终端：勾"本机作为汇总终端"，浏览器打开看板看全场
+                                单机：都不启用，一切照旧
+                        -->
+                        <Border Style="{StaticResource CardBorder}" Padding="14" Margin="0,0,0,10">
+                            <StackPanel>
+                                <TextBlock Text="工位联网 / MES 对接" Foreground="{StaticResource TextPrimary}"
+                                           FontSize="14" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                <TextBlock Foreground="{StaticResource TextMuted}" FontSize="11"
+                                           TextWrapping="Wrap" Margin="0,0,0,10"
+                                           Text="同一个包里包含三种角色：① 工位端（上报）② 汇总终端（看板）③ 单机（都不填）。改完点最下面「保存设置」立即生效。"/>
+
+                                <CheckBox Content="启用工位联网" Foreground="{StaticResource TextPrimary}"
+                                          IsChecked="{Binding CurrentSettings.Station.Enabled}" Margin="0,0,0,8"/>
+
+                                <Grid Margin="0,0,0,6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="90"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="90"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="工位编号" Foreground="{StaticResource TextSecond}"
+                                               FontSize="12" VerticalAlignment="Center"/>
+                                    <TextBox Grid.Column="1" Style="{StaticResource DarkInput}" Margin="0,0,12,0"
+                                             Text="{Binding CurrentSettings.Station.StationCode, UpdateSourceTrigger=PropertyChanged}"
+                                             ToolTip="全厂唯一，建议与 MES 的工位编码一致，例如 ST-07"/>
+                                    <TextBlock Grid.Column="2" Text="产线名" Foreground="{StaticResource TextSecond}"
+                                               FontSize="12" VerticalAlignment="Center"/>
+                                    <TextBox Grid.Column="3" Style="{StaticResource DarkInput}"
+                                             Text="{Binding CurrentSettings.Station.LineName, UpdateSourceTrigger=PropertyChanged}"
+                                             ToolTip="例如 Line-03"/>
+                                </Grid>
+
+                                <Grid Margin="0,0,0,6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="90"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="工位名" Foreground="{StaticResource TextSecond}"
+                                               FontSize="12" VerticalAlignment="Center"/>
+                                    <TextBox Grid.Column="1" Style="{StaticResource DarkInput}"
+                                             Text="{Binding CurrentSettings.Station.StationName, UpdateSourceTrigger=PropertyChanged}"
+                                             ToolTip="现场看的名字，例如 主机装配 7 号位"/>
+                                </Grid>
+
+                                <Grid Margin="0,0,0,6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="90"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="90"/>
+                                        <ColumnDefinition Width="60"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="汇总终端地址" Foreground="{StaticResource TextSecond}"
+                                               FontSize="12" VerticalAlignment="Center"/>
+                                    <TextBox Grid.Column="1" Style="{StaticResource DarkInput}" Margin="0,0,12,0"
+                                             Text="{Binding CurrentSettings.Station.HubUrl, UpdateSourceTrigger=PropertyChanged}"
+                                             ToolTip="本机要做工位上报时填这里，例如 http://192.168.1.50:8088"/>
+                                    <TextBlock Grid.Column="2" Text="上报间隔(秒)" Foreground="{StaticResource TextSecond}"
+                                               FontSize="12" VerticalAlignment="Center"/>
+                                    <TextBox Grid.Column="3" Style="{StaticResource DarkInput}"
+                                             Text="{Binding CurrentSettings.Station.ReportIntervalSec, UpdateSourceTrigger=PropertyChanged}"/>
+                                </Grid>
+
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                    <CheckBox Content="本机作为汇总终端（对外提供看板页面）"
+                                              Foreground="{StaticResource TextPrimary}"
+                                              IsChecked="{Binding CurrentSettings.Station.IsHub}"
+                                              VerticalAlignment="Center"/>
+                                    <TextBlock Text="端口" Foreground="{StaticResource TextSecond}"
+                                               FontSize="12" VerticalAlignment="Center" Margin="16,0,6,0"/>
+                                    <TextBox Style="{StaticResource DarkInput}" Width="70"
+                                             Text="{Binding CurrentSettings.Station.HubPort, UpdateSourceTrigger=PropertyChanged}"/>
+                                    <Button Style="{StaticResource ToolButton}" Content="🌐 打开看板"
+                                            Command="{Binding OpenWallboardCommand}"
+                                            Margin="12,0,0,0" Padding="12,5" FontSize="11"
+                                            ToolTip="用浏览器打开汇总看板，几十个工位一屏看完"/>
+                                    <Button Style="{StaticResource ToolButton}" Content="📋 复制地址"
+                                            Command="{Binding CopyWallboardUrlCommand}"
+                                            Margin="6,0,0,0" Padding="12,5" FontSize="11"
+                                            ToolTip="把看板地址复制到剪贴板 —— 车间其它电脑/手机要访问的就是这个地址"/>
+                                </StackPanel>
+
+                                <!-- 看板地址一直显示出来，不用点也知道该输什么 -->
+                                <TextBlock Text="{Binding WallboardUrlText}" Foreground="{StaticResource TextPrimary}"
+                                           FontFamily="{StaticResource MonoFont}" FontSize="12"
+                                           TextWrapping="Wrap" Margin="0,6,0,0"/>
+                                <TextBlock Text="{Binding NetworkStatusText}" Foreground="{StaticResource TextAccent}"
+                                           FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
+
+                                <!-- MES -->
+                                <TextBlock Text="MES 上传（留好的对接接口）" Foreground="{StaticResource TextPrimary}"
+                                           FontSize="13" FontWeight="SemiBold" Margin="0,4,0,6"/>
+                                <CheckBox Content="启用上传到 MES" Foreground="{StaticResource TextPrimary}"
+                                          IsChecked="{Binding CurrentSettings.Mes.Enabled}" Margin="0,0,0,8"/>
+                                <Grid Margin="0,0,0,6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="90"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="接口地址" Foreground="{StaticResource TextSecond}"
+                                               FontSize="12" VerticalAlignment="Center"/>
+                                    <TextBox Grid.Column="1" Style="{StaticResource DarkInput}"
+                                             Text="{Binding CurrentSettings.Mes.EndpointUrl, UpdateSourceTrigger=PropertyChanged}"
+                                             ToolTip="MES 接收接口（HTTP POST，JSON 体），例如 http://mes-server/api/sop/upload"/>
+                                </Grid>
+                                <Grid Margin="0,0,0,6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="90"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="90"/>
+                                        <ColumnDefinition Width="60"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="令牌" Foreground="{StaticResource TextSecond}"
+                                               FontSize="12" VerticalAlignment="Center"/>
+                                    <TextBox Grid.Column="1" Style="{StaticResource DarkInput}" Margin="0,0,12,0"
+                                             Text="{Binding CurrentSettings.Mes.Token, UpdateSourceTrigger=PropertyChanged}"
+                                             ToolTip="留空则不加 Authorization 头"/>
+                                    <TextBlock Grid.Column="2" Text="超时(秒)" Foreground="{StaticResource TextSecond}"
+                                               FontSize="12" VerticalAlignment="Center"/>
+                                    <TextBox Grid.Column="3" Style="{StaticResource DarkInput}"
+                                             Text="{Binding CurrentSettings.Mes.TimeoutSec, UpdateSourceTrigger=PropertyChanged}"/>
+                                </Grid>
+                                <CheckBox Content="同时在本地留一份同样的 JSON（对接联调、或暂时没有 MES 时）"
+                                          Foreground="{StaticResource TextPrimary}"
+                                          IsChecked="{Binding CurrentSettings.Mes.SaveLocalCopy}" Margin="0,0,0,8"/>
+                                <StackPanel Orientation="Horizontal">
+                                    <Button Style="{StaticResource ToolButton}" Content="测试连接"
+                                            Command="{Binding TestMesConnectionCommand}"
+                                            Margin="0,0,8,0" Padding="12,5" FontSize="11"/>
+                                    <Button Style="{StaticResource ToolButton}" Content="立即补发积压"
+                                            Command="{Binding FlushMesQueueCommand}"
+                                            Padding="12,5" FontSize="11"
+                                            ToolTip="断网期间的数据会排队等补发，这里可以立刻重试一次"/>
+                                    <TextBlock Text="{Binding MesQueueText}" Foreground="{StaticResource TextMuted}"
+                                               FontSize="11" VerticalAlignment="Center" Margin="12,0,0,0"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <!--
+                            模板池 + 一键下发
+                            ── 一条线 30 个工位，换产线/换产品时在终端点一次，所有工位自动拉取生效。
+                               也支持"第一次建模板时汇总到池子里"，以后直接从池子挑一份下发。
+                        -->
+                        <Border Style="{StaticResource CardBorder}" Padding="14" Margin="0,0,0,10">
+                            <StackPanel>
+                                <TextBlock Text="配方下发（一键部署到全部工位）" Foreground="{StaticResource TextPrimary}"
+                                           FontSize="14" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                <TextBlock Foreground="{StaticResource TextMuted}" FontSize="11"
+                                           TextWrapping="Wrap" Margin="0,0,0,10"
+                                           Text="换产品时：在「汇总终端」上挑一份模板 →「一键下发」→ 所有工位在 15 秒内自动拉到并生效（关机的工位开机后自动补上）。第一次建模板时，先点「把本机模板汇总到终端」把配置交进池子。"/>
+
+                                <Grid Margin="0,0,0,8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="90"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="模板名" Foreground="{StaticResource TextSecond}"
+                                               FontSize="12" VerticalAlignment="Center"/>
+                                    <TextBox Grid.Column="1" Style="{StaticResource DarkInput}"
+                                             Text="{Binding TemplateName, UpdateSourceTrigger=PropertyChanged}"
+                                             ToolTip="例如 MIRROR_DEMO · 主机装配"/>
+                                </Grid>
+
+                                <WrapPanel Margin="0,0,0,8">
+                                    <CheckBox Content="包含 ROI 坐标" Foreground="{StaticResource TextPrimary}"
+                                              IsChecked="{Binding TemplateIncludeRois}" VerticalAlignment="Center"
+                                              Margin="0,0,16,6"
+                                              ToolTip="各工位相机机位完全一致时勾上（框的位置也一起下发）；不一致就别勾，只下发流程与参数"/>
+                                    <CheckBox Content="包含教示样本" Foreground="{StaticResource TextPrimary}"
+                                              IsChecked="{Binding TemplateIncludeSamples}" VerticalAlignment="Center"
+                                              Margin="0,0,0,6"
+                                              ToolTip="默认不带：样本和机位/光照强相关。只有想把某台调好的工位当样板批量铺开时才勾"/>
+                                </WrapPanel>
+
+                                <WrapPanel Margin="0,0,0,8">
+                                    <Button Style="{StaticResource ToolButton}" Content="⬆ 把本机模板汇总到终端"
+                                            Command="{Binding UploadTemplateCommand}"
+                                            Margin="0,0,8,6" Padding="12,5" FontSize="11"
+                                            ToolTip="第一次把配方/SOP 调好之后做一次，配置就进终端的模板池了"/>
+                                    <Button Style="{StaticResource PrimaryButton}" Content="⬇ 一键下发到全部工位"
+                                            Command="{Binding PublishTemplateCommand}"
+                                            Margin="0,0,8,6" Padding="14,5" FontSize="11"
+                                            ToolTip="把下面选中的模板（不选则用本机当前配置）下发到所有工位"/>
+                                    <Button Style="{StaticResource ToolButton}" Content="⟳ 刷新模板池/状态"
+                                            Command="{Binding RefreshDeployStatusCommand}"
+                                            Margin="0,0,0,6" Padding="12,5" FontSize="11"/>
+                                </WrapPanel>
+
+                                <TextBlock Text="{Binding DeployStatusText}" Foreground="{StaticResource TextAccent}"
+                                           FontSize="11" TextWrapping="Wrap" Margin="0,0,0,6"/>
+                                <TextBlock Text="{Binding AppliedTemplateText}" Foreground="{StaticResource TextMuted}"
+                                           FontSize="11" Margin="0,0,0,8"/>
+
+                                <TextBlock Text="终端模板池（选一份再点「一键下发」）" Foreground="{StaticResource TextSecond}"
+                                           FontSize="11" Margin="0,0,0,4"/>
+                                <ListBox ItemsSource="{Binding DeployPool}"
+                                         SelectedItem="{Binding SelectedPoolItem}"
+                                         ItemContainerStyle="{StaticResource DarkListItem}"
+                                         Background="{StaticResource BgPanelDeep}"
+                                         BorderThickness="0" MaxHeight="140"
+                                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Margin="2,3">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Text="{Binding Name}" Foreground="{StaticResource TextPrimary}"
+                                                               FontSize="12" FontWeight="SemiBold"/>
+                                                    <Border CornerRadius="3" Padding="6,1" Margin="8,0,0,0"
+                                                            Background="{StaticResource AccentCyan}"
+                                                            Visibility="{Binding IsCurrent, Converter={StaticResource BoolToVisibility}}">
+                                                        <TextBlock Text="当前下发版本" Foreground="#0A101A"
+                                                                   FontSize="10" FontWeight="Bold"/>
+                                                    </Border>
+                                                </StackPanel>
+                                                <TextBlock Foreground="{StaticResource TextMuted}" FontSize="11"
+                                                           TextWrapping="Wrap">
+                                                    <Run Text="{Binding SourceStation, Mode=OneWay}"/>
+                                                    <Run Text=" · "/>
+                                                    <Run Text="{Binding CreatedAt, Mode=OneWay}"/>
+                                                    <Run Text=" · "/>
+                                                    <Run Text="{Binding Summary, Mode=OneWay}"/>
+                                                </TextBlock>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- 相机 -->
+                        <Border Style="{StaticResource CardBorder}" Padding="14" Margin="0,0,0,10">
+                            <StackPanel>
+                                <TextBlock Text="相机" Foreground="{StaticResource TextPrimary}"
+                                           FontSize="14" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                                <Grid Margin="0,0,0,6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="90"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="显示名称" Foreground="{StaticResource TextSecond}"
+                                               FontSize="12" VerticalAlignment="Center"/>
+                                    <TextBox Grid.Column="1" Style="{StaticResource DarkInput}"
+                                             Text="{Binding CurrentSettings.Cameras[0].DisplayName, UpdateSourceTrigger=PropertyChanged}"/>
+                                </Grid>
+                                <Grid Margin="0,0,0,6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="90"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="90"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="厂商" Foreground="{StaticResource TextSecond}"
+                                               FontSize="12" VerticalAlignment="Center"/>
+                                    <TextBox Grid.Column="1" Style="{StaticResource DarkInput}" Margin="0,0,12,0"
+                                             Text="{Binding CurrentSettings.Cameras[0].Vendor, UpdateSourceTrigger=PropertyChanged}"/>
+                                    <TextBlock Grid.Column="2" Text="型号" Foreground="{StaticResource TextSecond}"
+                                               FontSize="12" VerticalAlignment="Center"/>
+                                    <TextBox Grid.Column="3" Style="{StaticResource DarkInput}"
+                                             Text="{Binding CurrentSettings.Cameras[0].Model, UpdateSourceTrigger=PropertyChanged}"/>
+                                </Grid>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="90"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="90"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="序列号" Foreground="{StaticResource TextSecond}"
+                                               FontSize="12" VerticalAlignment="Center"/>
+                                    <TextBox Grid.Column="1" Style="{StaticResource DarkInput}" Margin="0,0,12,0"
+                                             Text="{Binding CurrentSettings.Cameras[0].SerialNumber, UpdateSourceTrigger=PropertyChanged}"/>
+                                    <TextBlock Grid.Column="2" Text="相机 IP" Foreground="{StaticResource TextSecond}"
+                                               FontSize="12" VerticalAlignment="Center"/>
+                                    <TextBox Grid.Column="3" Style="{StaticResource DarkInput}"
+                                             Text="{Binding CurrentSettings.Cameras[0].IpAddress, UpdateSourceTrigger=PropertyChanged}"/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- PLC -->
+                        <Border Style="{StaticResource CardBorder}" Padding="14" Margin="0,0,0,10">
+                            <StackPanel>
+                                <TextBlock Text="PLC / IO" Foreground="{StaticResource TextPrimary}"
+                                           FontSize="14" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="90"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="90"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="70"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="品牌" Foreground="{StaticResource TextSecond}"
+                                               FontSize="12" VerticalAlignment="Center"/>
+                                    <TextBox Grid.Column="1" Style="{StaticResource DarkInput}" Margin="0,0,12,0"
+                                             Text="{Binding CurrentSettings.Plc.Brand, UpdateSourceTrigger=PropertyChanged}"/>
+                                    <TextBlock Grid.Column="2" Text="IP 地址" Foreground="{StaticResource TextSecond}"
+                                               FontSize="12" VerticalAlignment="Center"/>
+                                    <TextBox Grid.Column="3" Style="{StaticResource DarkInput}" Margin="0,0,12,0"
+                                             Text="{Binding CurrentSettings.Plc.IpAddress, UpdateSourceTrigger=PropertyChanged}"/>
+                                    <TextBlock Grid.Column="4" Text="端口" Foreground="{StaticResource TextSecond}"
+                                               FontSize="12" VerticalAlignment="Center"/>
+                                    <TextBox Grid.Column="5" Style="{StaticResource DarkInput}"
+                                             Text="{Binding CurrentSettings.Plc.Port, UpdateSourceTrigger=PropertyChanged}"/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- 报警 + 存储 -->
+                        <Border Style="{StaticResource CardBorder}" Padding="14" Margin="0,0,0,10">
+                            <StackPanel>
+                                <TextBlock Text="报警与存储" Foreground="{StaticResource TextPrimary}"
+                                           FontSize="14" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                                <WrapPanel>
+                                    <CheckBox Content="启用声光报警" Foreground="{StaticResource TextPrimary}"
+                                              IsChecked="{Binding CurrentSettings.Alarm.Enabled}" Margin="0,0,18,8"/>
+                                    <CheckBox Content="保存 NG 图" Foreground="{StaticResource TextPrimary}"
+                                              IsChecked="{Binding CurrentSettings.SaveNgImage}" Margin="0,0,18,8"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,18,8">
+                                        <TextBlock Text="蜂鸣自动停止(秒)" Foreground="{StaticResource TextSecond}"
+                                                   FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                        <TextBox Style="{StaticResource DarkInput}" Width="70"
+                                                 Text="{Binding CurrentSettings.Alarm.BuzzerAutoOffSeconds, UpdateSourceTrigger=PropertyChanged}"/>
+                                    </StackPanel>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,18,8">
+                                        <TextBlock Text="NG 图保留(天)" Foreground="{StaticResource TextSecond}"
+                                                   FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                        <TextBox Style="{StaticResource DarkInput}" Width="70"
+                                                 Text="{Binding CurrentSettings.NgImageRetentionDays, UpdateSourceTrigger=PropertyChanged}"/>
+                                    </StackPanel>
+                                </WrapPanel>
+                                <TextBlock Text="{Binding CurrentSettings.DataRoot, StringFormat=数据目录：{0}}"
+                                           Foreground="{StaticResource TextMuted}" FontSize="11"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- 过程层规则 -->
+                        <!-- 界面缩放：现场按显示器大小 / 观看距离自己定 -->
+                        <Border Style="{StaticResource CardBorder}" Padding="14" Margin="0,0,0,10">
+                            <StackPanel>
+                                <TextBlock Text="界面缩放" Foreground="{StaticResource TextPrimary}"
+                                           FontSize="14" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                <TextBlock Foreground="{StaticResource TextMuted}" FontSize="12" TextWrapping="Wrap"
+                                           Text="觉得字小就调大；放大后如果超出屏幕，窗口会自动最大化。设置会保存，下次打开还是这个大小。"/>
+                                <Grid Margin="0,10,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="70"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Slider Grid.Column="0" Minimum="0.8" Maximum="1.6"
+                                            TickFrequency="0.05" IsSnapToTickEnabled="True"
+                                            Value="{Binding UiScale}"
+                                            VerticalAlignment="Center"
+                                            ToolTip="拖动即可实时预览"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding UiScalePercentText}"
+                                               Foreground="{StaticResource TextAccent}"
+                                               FontSize="14" FontWeight="Bold"
+                                               HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Style="{StaticResource CardBorder}" Padding="14" Margin="0,0,0,10">
+                            <StackPanel>
+                                <TextBlock Text="过程层规则（手部动作合规）" Foreground="{StaticResource TextPrimary}"
+                                           FontSize="14" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                <TextBlock Text="{Binding ProcessRuleSummary}" Foreground="{StaticResource TextSecond}"
+                                           FontSize="11" Margin="0,0,0,10" TextWrapping="Wrap"/>
+                                <!-- 逐项：名称 + 输入框 + "是什么/怎么调"的说明 -->
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="190"/>
+                                        <ColumnDefinition Width="90"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="停留阈值 K（毫秒）"
+                                               Foreground="{StaticResource TextSecond}" FontSize="12" VerticalAlignment="Center"/>
+                                    <TextBox Grid.Column="1" Style="{StaticResource DarkInput}"
+                                             Text="{Binding ProcessConfig.Kms, UpdateSourceTrigger=PropertyChanged}"/>
+                                    <StackPanel Grid.Column="2" Margin="10,0,0,0" VerticalAlignment="Center">
+                                        <ToggleButton x:Name="HintK" Style="{StaticResource HintToggle}"/>
+                                        <Border Background="{StaticResource BgPanelDeep}" CornerRadius="4" Padding="8,6" Margin="0,4,0,0"
+                                                Visibility="{Binding IsChecked, ElementName=HintK, Converter={StaticResource BoolToVisibility}}">
+                                            <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextSecond}" FontSize="12"
+                                                       Text="手要在目标位置停够多久，才算这一步做到位。默认 300ms（约 8 帧）。调大＝对动作要求更严（手一晃不算数，但也更容易判不达标）；调小＝更宽松。"/>
+                                        </Border>
+                                    </StackPanel>
+                                </Grid>
+
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="190"/>
+                                        <ColumnDefinition Width="90"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="动作时间窗 T（毫秒）"
+                                               Foreground="{StaticResource TextSecond}" FontSize="12" VerticalAlignment="Center"/>
+                                    <TextBox Grid.Column="1" Style="{StaticResource DarkInput}"
+                                             Text="{Binding ProcessConfig.TimeWindowMs, UpdateSourceTrigger=PropertyChanged}"/>
+                                    <StackPanel Grid.Column="2" Margin="10,0,0,0" VerticalAlignment="Center">
+                                        <ToggleButton x:Name="HintT" Style="{StaticResource HintToggle}"/>
+                                        <Border Background="{StaticResource BgPanelDeep}" CornerRadius="4" Padding="8,6" Margin="0,4,0,0"
+                                                Visibility="{Binding IsChecked, ElementName=HintT, Converter={StaticResource BoolToVisibility}}">
+                                            <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextSecond}" FontSize="12"
+                                                       Text="给这一步留多长时间。超过还没做完就判「目标未完成」并锁线。按现场实际节拍放宽 20~30% 最稳妥，太紧会误拦慢手员工。"/>
+                                        </Border>
+                                    </StackPanel>
+                                </Grid>
+
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="190"/>
+                                        <ColumnDefinition Width="90"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="关键点置信度阈值"
+                                               Foreground="{StaticResource TextSecond}" FontSize="12" VerticalAlignment="Center"/>
+                                    <TextBox Grid.Column="1" Style="{StaticResource DarkInput}"
+                                             Text="{Binding ProcessConfig.MinConfidence, UpdateSourceTrigger=PropertyChanged}"/>
+                                    <StackPanel Grid.Column="2" Margin="10,0,0,0" VerticalAlignment="Center">
+                                        <ToggleButton x:Name="HintConf" Style="{StaticResource HintToggle}"/>
+                                        <Border Background="{StaticResource BgPanelDeep}" CornerRadius="4" Padding="8,6" Margin="0,4,0,0"
+                                                Visibility="{Binding IsChecked, ElementName=HintConf, Converter={StaticResource BoolToVisibility}}">
+                                            <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextSecond}" FontSize="12"
+                                                       Text="低于这个置信度就认为「看不清」（手被零件挡住、出画面）。看不清的帧既不累加也不清零 —— 0.5 是通用起点，现场遮挡多就调低。"/>
+                                        </Border>
+                                    </StackPanel>
+                                </Grid>
+
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="190"/>
+                                        <ColumnDefinition Width="90"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="连续丢失上限（毫秒）"
+                                               Foreground="{StaticResource TextSecond}" FontSize="12" VerticalAlignment="Center"/>
+                                    <TextBox Grid.Column="1" Style="{StaticResource DarkInput}"
+                                             Text="{Binding ProcessConfig.MaxUnreliableMs, UpdateSourceTrigger=PropertyChanged}"/>
+                                    <StackPanel Grid.Column="2" Margin="10,0,0,0" VerticalAlignment="Center">
+                                        <ToggleButton x:Name="HintUnrel" Style="{StaticResource HintToggle}"/>
+                                        <Border Background="{StaticResource BgPanelDeep}" CornerRadius="4" Padding="8,6" Margin="0,4,0,0"
+                                                Visibility="{Binding IsChecked, ElementName=HintUnrel, Converter={StaticResource BoolToVisibility}}">
+                                            <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextSecond}" FontSize="12"
+                                                       Text="连续看不清超过这个时长就弹报警请人确认 —— 注意是「报警」，不是判违规、不锁线。看不清不等于做错了，这条是防误拦的关键。"/>
+                                        </Border>
+                                    </StackPanel>
+                                </Grid>
+
+                                <StackPanel Orientation="Horizontal">
+                                    <CheckBox Content="步骤间强制顺序（跳步/错序判违规）"
+                                              Foreground="{StaticResource TextPrimary}"
+                                              IsChecked="{Binding ProcessConfig.OrderEnforced}" VerticalAlignment="Center"/>
+                                    <ToggleButton x:Name="HintOrder" Style="{StaticResource HintToggle}" Margin="10,0,0,0"/>
+                                </StackPanel>
+                                <Border Background="{StaticResource BgPanelDeep}" CornerRadius="4" Padding="8,6" Margin="0,4,0,0"
+                                        Visibility="{Binding IsChecked, ElementName=HintOrder, Converter={StaticResource BoolToVisibility}}">
+                                    <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextSecond}" FontSize="12"
+                                               Text="勾上：必须按 1→2→3 顺序做，跳步会被拦下并锁线；不勾：只要求这些动作都做过，不管先后（顺序本来不固定的工位选这个）。"/>
+                                </Border>
+                            </StackPanel>
+                        </Border>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                            <Button Style="{StaticResource PrimaryButton}" Content="保存设置"
+                                    Command="{Binding SaveSettingsCommand}" Margin="0,0,8,0"/>
+                            <Button Style="{StaticResource ToolButton}" Content="重新载入配置"
+                                    Command="{Binding ReloadSettingsCommand}" Margin="0,0,8,0"/>
+                            <Button Style="{StaticResource ToolButton}" Content="保存过程层规则"
+                                    Command="{Binding SaveProcessRuleCommand}"/>
+                        </StackPanel>
+                    </StackPanel>
+                </ScrollViewer>
+            </Grid>
+
+        </Grid>
+
+        <!-- ============================ 状态条 ============================ -->
+        <Border Grid.Row="3" Background="{StaticResource BgPanel}"
+                BorderBrush="{StaticResource BgNavLine}" BorderThickness="0,1,0,1"
+                Padding="16,6">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="{Binding StatusMessage}"
+                           Foreground="{StaticResource TextPrimary}"
+                           FontSize="12" VerticalAlignment="Center"/>
+                <TextBlock Grid.Column="1" Text="{Binding CameraStatus}"
+                           Foreground="{StaticResource TextSecond}"
+                           FontSize="12" Margin="0,0,18,0" VerticalAlignment="Center"/>
+                <TextBlock Grid.Column="2" Text="{Binding PlcStatus}"
+                           Foreground="{StaticResource TextSecond}"
+                           FontSize="12" Margin="0,0,18,0" VerticalAlignment="Center"/>
+                <TextBlock Grid.Column="3" Text="{Binding AlarmStatusText}"
+                           Foreground="{Binding AlarmSignalKey, Converter={StaticResource AlarmKeyToBrush}}"
+                           FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                <TextBlock Grid.Column="4" Text="{Binding BuildStampText}"
+                           Foreground="{StaticResource TextMuted}"
+                           FontSize="11" Margin="18,0,0,0" VerticalAlignment="Center"
+                           ToolTip="当前运行版本的编译时间 —— 用来确认「改了有没有生效」"/>
+            </Grid>
+        </Border>
+
+        <!-- ============================ 底部历史表格 ============================ -->
+        <Border Grid.Row="4" Style="{StaticResource CardBorder}" Margin="12,8,12,12">
+            <DockPanel LastChildFill="True">
+                <Grid DockPanel.Dock="Top" Margin="14,10,14,8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Orientation="Horizontal">
+                        <TextBlock Text="历史数据"
+                                   Foreground="{StaticResource TextPrimary}"
+                                   FontSize="14" FontWeight="SemiBold"/>
+                        <TextBlock Text="{Binding HistoryRecords.Count, StringFormat=（{0} 条）}"
+                                   Foreground="{StaticResource TextSecond}"
+                                   FontSize="12" Margin="8,2,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="2" Orientation="Horizontal">
+                        <Button Style="{StaticResource ToolButton}" Content="导出 CSV"
+                                Command="{Binding ExportHistoryCommand}"/>
+                    </StackPanel>
+                </Grid>
+
+                <DataGrid Style="{StaticResource HistoryDataGrid}"
+                          ItemsSource="{Binding HistoryRecords}"
+                          Margin="6,0,6,8">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="时间" Width="170"
+                                            Binding="{Binding Timestamp, StringFormat=yyyy-MM-dd HH:mm:ss}"/>
+                        <DataGridTextColumn Header="批次" Width="130"
+                                            Binding="{Binding BatchNo}"/>
+                        <DataGridTextColumn Header="产品型号" Width="160"
+                                            Binding="{Binding ProductModel}"/>
+                        <DataGridTextColumn Header="检测配方" Width="160"
+                                            Binding="{Binding RecipeName}"/>
+                    <DataGridTextColumn Header="结果" Width="100"
+                                        Binding="{Binding Verdict, Converter={StaticResource VerdictToText}}">
+                        <!-- 同上：OK 绿、NG 红加粗 -->
+                        <DataGridTextColumn.ElementStyle>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+                                <Setter Property="FontWeight" Value="SemiBold"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding Verdict}" Value="Fail">
+                                        <Setter Property="Foreground" Value="{StaticResource StateNg}"/>
+                                        <Setter Property="FontWeight" Value="Bold"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding Verdict}" Value="Pass">
+                                        <Setter Property="Foreground" Value="{StaticResource StateOk}"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </DataGridTextColumn.ElementStyle>
+                    </DataGridTextColumn>
+                        <DataGridTextColumn Header="操作员" Width="100"
+                                            Binding="{Binding Operator}"/>
+                        <DataGridTextColumn Header="判定说明" Width="*"
+                                            Binding="{Binding JudgementReason}"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+            </DockPanel>
+        </Border>
+    </Grid>
+</Window>

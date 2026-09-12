@@ -1,0 +1,208 @@
+﻿using System.IO;
+using System.Windows;
+using VisionForge.Common.Events;
+using VisionForge.Core.Interfaces;
+using VisionForge.Core.Models;
+using VisionForge.Hardware.Alarm;
+using VisionForge.Hardware.Plc;
+using VisionForge.Hardware.Vision;
+using VisionForge.Infrastructure.Config;
+using VisionForge.Infrastructure.Logging;
+using VisionForge.Infrastructure.Storage;
+using VisionForge.Main.ViewModels;
+
+namespace VisionForge.Main;
+
+/// <summary>
+/// 应用程序入口 —— 也就是所谓的「组合根」（Composition Root）。
+///
+/// <para>整套分层架构里，<b>只有这一个地方</b>知道所有具体实现类的存在：
+/// 它知道要用 JsonRecipeRepository 而不是别的仓储，
+/// 知道要用 ModbusTcpPlcClient 而不是别的 PLC 客户端。
+/// 其他地方（Core / ViewModel / View）统统只认接口。</para>
+///
+/// <para>收益很直接：如果哪天要换成 SQLite 仓储，或者接欧姆龙 FINS，
+/// 改的就是下面这几行装配代码，业务代码一行不动。</para>
+///
+/// <para>不引入 DI 容器（Autofac / Microsoft.Extensions.DependencyInjection）是刻意的：
+/// 这个规模的项目手工装配一共二十来行，比引一个容器 + 学一套配置语法划算得多，
+/// 而且依赖关系一眼看得见，不用去猜"这个接口到底是谁注册的"。</para>
+/// </summary>
+public partial class App : Application
+{
+    private FileLogger? _logger;
+    private MainViewModel? _viewModel;
+
+    /// <summary>全局配置。</summary>
+    public static AppSettingsProvider Settings { get; private set; } = null!;
+
+    protected override void OnStartup(StartupEventArgs e)
+    {
+        base.OnStartup(e);
+
+        // ---- 异常兜底：工控软件不能因为一个界面异常就整个退出 ----
+        // 这个补丁的由来很具体：ProgressBar.Value 默认是双向绑定，
+        // 绑到只读属性上会在渲染阶段抛 InvalidOperationException，
+        // 直接把进程带崩，日志里只剩半行启动记录，极难定位。
+        // 现在这类异常会被写进日志 + 弹窗提示，程序继续运行。
+        DispatcherUnhandledException += (_, args) =>
+        {
+            try { _logger?.Error("界面线程未处理异常", args.Exception); } catch { }
+
+            try
+            {
+                MessageBox.Show(
+                    "界面出现异常，已写入日志，程序会继续运行：\n\n" + args.Exception.Message,
+                    "VisionForge", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+            catch { }
+
+            args.Handled = true;
+        };
+
+        AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+        {
+            try
+            {
+                if (args.ExceptionObject is Exception ex)
+                    _logger?.Error("后台线程未处理异常（进程将退出）", ex);
+                else
+                    _logger?.Error("后台线程未处理异常：" + args.ExceptionObject);
+            }
+            catch { }
+        };
+
+        // ---- 自检模式：不开界面，把监测逻辑用例跑完就退出 ----
+        // 用法：VisionForge.Main.exe --selftest
+        // 退出码：0 = 全部通过，1 = 有失败项（可直接接 CI / 交付验收）
+        if (e.Args.Any(a => string.Equals(a, "--selftest", StringComparison.OrdinalIgnoreCase)))
+        {
+            int exitCode;
+            try
+            {
+                string reportPath = Path.Combine(AppContext.BaseDirectory, "data", "selftest", "report.txt");
+
+                // 必须丢到线程池上跑：OnStartup 就在 UI 线程里，
+                // 而自检里大量"同步等待异步"，在 UI 线程上跑会自己把自己锁死
+                exitCode = Task.Run(() => SelfTest.SelfTestRunner.Run(AppContext.BaseDirectory, reportPath))
+                               .GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                File.AppendAllText(
+                    Path.Combine(AppContext.BaseDirectory, "data", "selftest-error.txt"),
+                    DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " 自检运行异常：" + ex + Environment.NewLine);
+                exitCode = 1;
+            }
+
+            Environment.Exit(exitCode);
+            return;
+        }
+
+        // ---- 路径：统一挂在 exe 同级目录，避免受"当前工作目录"影响 ----
+        // 用相对路径的话，从不同方式启动（快捷方式 / 计划任务 / 调试器）
+        // 会指向不同目录，日志和配方就找不到了，这类问题很难排查。
+        var baseDir = AppContext.BaseDirectory;
+        var configPath = Path.Combine(baseDir, "config", "appsettings.json");
+
+        Settings = new AppSettingsProvider(configPath);
+        var s = Settings.Current;
+
+        if (!Path.IsPathRooted(s.DataRoot))
+            s.DataRoot = Path.Combine(baseDir, s.DataRoot);
+
+        // ---- 配置自愈：补上实时拦截要用的"规则码"地址 ----
+        // 契约是把违规码写到 PLC 的某个寄存器（默认 D201）。
+        // 老配置文件里没有这项，自动补上并落盘 —— 否则这个功能会静默失效。
+        if (!s.PlcAddresses.Any(a => a.Name == "RuleCode"))
+        {
+            s.PlcAddresses.Add(new PlcAddressItem
+            {
+                Name = "RuleCode",
+                Address = "D201",
+                DataType = PlcDataType.Int16,
+                Writable = true,
+                Description = "违规规则码 0=跳步 1=错序 2=目标未完成 3=数量不符 4=关键点丢失 5=配置错误",
+            });
+            Settings.Save(force: true);
+        }
+
+        // ---- 各层装配 ----
+        _logger = new FileLogger(s.LogDirectory);
+        _logger.Info("========== VisionForge 启动 ==========");
+        _logger.Info($"数据目录：{s.DataRoot}");
+
+        var events = new EventAggregator();
+        var algorithms = AlgorithmRegistry.CreateDefault();
+        var recipes = new JsonRecipeRepository(s.RecipeDirectory);
+        var history = new JsonLineHistoryStore(s.HistoryDirectory, s.NgImageDirectory);
+
+        // ---- 示例数据 ----
+        // 示例配方只提供"流程骨架"（SOP 六道工序 + 一套算法参数），
+        // **不在画面上预置任何框** —— 框的位置和相机机位、料盒位置强相关，必须现场自己建。
+        // 这里还负责把老版本自动生成的 6 个预置框清掉（按坐标逐一对号，
+        // 现场自己挪过/改过的框一律不碰）。现场师傅自己建的配方绝不会被碰。
+        try
+        {
+            string cameraId = s.Cameras.FirstOrDefault()?.Id ?? "CAM-001";
+            string demoNote = Task.Run(() => DemoDataFactory.EnsureDemoDataAsync(recipes, s.DataRoot, cameraId))
+                                  .GetAwaiter().GetResult();
+            _logger.Info("示例数据：" + demoNote);
+        }
+        catch (Exception ex)
+        {
+            _logger.Warn("示例数据检查失败：" + ex.Message);
+        }
+
+        IPlcClient plc;
+        try
+        {
+            plc = PlcFactory.Create(s.Plc);
+        }
+        catch (NotSupportedException ex)
+        {
+            // 配置里写了个还没实现的 PLC 品牌时，不能让程序起不来 ——
+            // 退回模拟 PLC，并在日志里说清楚，操作员能继续用视觉部分
+            _logger.Warn($"PLC 初始化失败（{ex.Message}），已回退到模拟 PLC");
+            plc = new MockPlcClient(s.Plc);
+        }
+
+        _logger.Info($"已注册算法插件：{string.Join("、", algorithms.All.Select(a => a.DisplayName))}");
+        _logger.Info($"PLC：{s.Plc.Brand} @ {s.Plc.ToEndpoint()}");
+
+        // ---- 声光报警 ----
+        var alarm = AlarmFactory.Create(s.Alarm, plc, s.PlcAddresses);
+        if (alarm is PlcAlarmDevice pa)
+            _logger.Info($"声光报警：PLC 输出（绑定 {pa.BoundLightCount} 路灯，蜂鸣器={(pa.HasBuzzer ? "有" : "无")}）");
+        else
+            _logger.Info("声光报警：模拟模式（地址表里没找到灯光地址，或已在配置里关闭）");
+
+        // ---- ViewModel 与主窗口 ----
+        _viewModel = new MainViewModel(algorithms, recipes, history, plc, alarm, _logger, events, Settings);
+
+        var window = new MainWindow { DataContext = _viewModel };
+        // 注意这里不要写 async：方法体内没有 await，
+        // 编译器会报 CS1998（"此异步方法缺少 await"）——本项目的目标是 0 警告。
+        window.Closing += (_, _) =>
+        {
+            _logger?.Info("窗口关闭，正在释放资源…");
+            _viewModel?.Dispose();
+            Settings.Save(force: true);
+            _logger?.Flush(TimeSpan.FromSeconds(2));
+            _logger?.Dispose();
+        };
+
+        window.Show();
+
+        // 界面显示后再异步初始化，避免启动时白屏
+        _ = _viewModel.InitializeAsync();
+    }
+
+    protected override void OnExit(ExitEventArgs e)
+    {
+        _viewModel?.Dispose();
+        _logger?.Dispose();
+        base.OnExit(e);
+    }
+
+}

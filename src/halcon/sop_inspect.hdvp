@@ -1,0 +1,101 @@
+* ================================================================
+* sop_inspect.hdvp —— 【引擎调用版】给 C# / HDevEngine 调用的过程
+* ----------------------------------------------------------------
+* 相机：HC-500-10GM（GigE 黑白全局快门）
+* 用途：零件在位 + 工具归位 双 ROI 检测，返回 OK/NG 与匹配得分
+*
+* ⚠️ 与「独立运行版」的核心区别（这一点搞错上位机必卡死）：
+*
+*   独立运行版 sop_standalone.hdev 里是这么写的：
+*       open_framegrabber(...)        <- 自己开相机
+*       while(true)                   <- 自己死循环
+*           grab_image(...)           <- 自己等触发
+*           ...检测...
+*       endwhile
+*   那是给现场调试用的，只能在 HDevelop 里跑。
+*   如果拿它去 HDevEngine.Execute()，这一句就永不返回，
+*   C# 界面直接冻死，"停止"按钮都点不动（主线程根本没机会处理消息）。
+*
+*   本文件是引擎调用版，规则只有两条：
+*       ① 不开相机 —— 图像由 C# 从相机取好后传进来
+*       ② 不写循环 —— 一次调用只处理一帧，处理完立刻返回
+*   采集、硬件触发、循环调度全部交给 C# 上位机。
+*   这才是正确的职责划分：Halcon 管"看懂图"，上位机管"什么时候看图"。
+*
+* ⚠️ 第二个坑：模板不能在这里现场训练
+*   HDevelop 里常见写法是「训练代码用注释包起来，跑一次后注释掉」。
+*   但注释掉之后 ModelID_Part 这个变量就<b>不存在</b>了，
+*   后面 find_shape_model 会直接报「变量未初始化」。
+*   正确做法：训练和匹配彻底分开——
+*       训练：跑一次 train_templates.hdev，write_shape_model 存成 .shm 文件
+*       匹配：本文件用 read_shape_model 从 .shm 读进来
+*   见同目录 train_templates.hdev。
+* ================================================================
+
+procedure sop_inspect (Image : : ModelPathPart, ModelPathTool, MinScorePart, MinScoreTool, RoiPartRow1, RoiPartCol1, RoiPartRow2, RoiPartCol2, RoiToolRow1, RoiToolCol1, RoiToolRow2, RoiToolCol2 : Part_OK, Tool_OK, Step_OK, Part_Score, Tool_Score)
+
+    * ---------------- 初始化输出，保证任何分支下都有值 ----------------
+    Part_OK := 0
+    Tool_OK := 0
+    Step_OK := 0
+    Part_Score := 0.0
+    Tool_Score := 0.0
+
+    * ---------------- 防御：空图直接返回 ----------------
+    count_obj (Image, NumImages)
+    if (NumImages < 1)
+        return ()
+    endif
+
+    * ================= 检测 1：零件是否在位 =================
+    read_shape_model (ModelPathPart, ModelID_Part)
+
+    gen_rectangle1 (ROI_Part, RoiPartRow1, RoiPartCol1, RoiPartRow2, RoiPartCol2)
+    reduce_domain (Image, ROI_Part, Image_Part)
+
+    * 注意参数顺序：AngleStart, AngleExtent, MinScore, NumMatches, MaxOverlap,
+    *               SubPixel, NumLevels, Greediness
+    * NumMatches 给 0 表示返回全部匹配，我们自己取最高分——
+    * 因为「工具被取走」时 ROI 里可能匹配到别的干扰物，只取第一个容易误判。
+    find_shape_model (Image_Part, ModelID_Part, 0, rad(360), MinScorePart, 0, 0.5, \
+                      'least_squares', 0, 0.9, Row_P, Col_P, Angle_P, Score_Part)
+
+    TupleLength (Score_Part, NumMatchPart)
+    if (NumMatchPart > 0)
+        tuple_max (Score_Part, MaxScorePart)
+        Part_Score := MaxScorePart
+        if (MaxScorePart >= MinScorePart)
+            Part_OK := 1
+        endif
+    endif
+
+    * ================= 检测 2：工具是否归位 =================
+    read_shape_model (ModelPathTool, ModelID_Tool)
+
+    gen_rectangle1 (ROI_Tool, RoiToolRow1, RoiToolCol1, RoiToolRow2, RoiToolCol2)
+    reduce_domain (Image, ROI_Tool, Image_Tool)
+
+    find_shape_model (Image_Tool, ModelID_Tool, 0, rad(360), MinScoreTool, 0, 0.5, \
+                      'least_squares', 0, 0.9, Row_T, Col_T, Angle_T, Score_Tool)
+
+    TupleLength (Score_Tool, NumMatchTool)
+    if (NumMatchTool > 0)
+        tuple_max (Score_Tool, MaxScoreTool)
+        Tool_Score := MaxScoreTool
+        if (MaxScoreTool >= MinScoreTool)
+            Tool_OK := 1
+        endif
+    endif
+
+    * ================= 综合判定 =================
+    if (Part_OK = 1 and Tool_OK = 1)
+        Step_OK := 1
+    endif
+
+    * 释放模型句柄 —— Halcon 是原生内存，不释放会持续泄漏
+    clear_shape_model (ModelID_Part)
+    clear_shape_model (ModelID_Tool)
+
+    return ()
+
+endprocedure

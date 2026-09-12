@@ -1,0 +1,37 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\VisionForge.Core\VisionForge.Core.csproj" />
+    <ProjectReference Include="..\VisionForge.Hardware\VisionForge.Hardware.csproj" />
+    <ProjectReference Include="..\VisionForge.Infrastructure\VisionForge.Infrastructure.csproj" />
+    <ProjectReference Include="..\VisionForge.Common\VisionForge.Common.csproj" />
+  </ItemGroup>
+
+  <!--
+    品牌资源编译进程序集（而不是放在 exe 旁边）：
+    现场拷贝程序时不会漏文件，也就不会出现"logo 变成空白方块"。
+    源图是白底黑字的截图，这里用的是处理过的版本：浅底已抠透明、黑字改白字、
+    金色笔触保留 —— 否则黑字贴在深色界面上根本看不见。
+  -->
+  <ItemGroup>
+    <Resource Include="Assets\logo.png" />
+    <Resource Include="Assets\logo-icon.png" />
+    <Resource Include="Assets\logo.ico" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <!--
+      exe 的图标。写在这里才会被嵌进 VisionForge.Main.exe 的 Win32 资源里 ——
+      桌面快捷方式、任务栏、资源管理器里显示的都是它。
+      （只在 XAML 里设 Window.Icon 是不够的：那只管窗口标题栏，
+       快捷方式和任务栏仍是 exe 的默认图标。）
+    -->
+    <ApplicationIcon>Assets\logo.ico</ApplicationIcon>
+  </PropertyGroup>
+
+</Project>

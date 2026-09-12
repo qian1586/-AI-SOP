@@ -1,0 +1,219 @@
+<Window x:Class="VisionForge.Main.SopBoardWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="SOP 作业看板"
+        WindowState="Maximized"
+        WindowStyle="None"
+        ResizeMode="NoResize"
+        AllowsTransparency="False"
+        Background="#0D0D0F"
+        Topmost="False">
+
+    <!--
+        车间大屏看板。
+        设计目标只有一条：工人站在 3~5 米外抬头，一眼就知道"现在该干什么"。
+
+        所以做取舍：
+          · 字号往大了做（当前步骤名 76px），不追求信息密度
+          · 全屏无边框，避免大屏上出现任务栏和窗口标题栏
+          · 颜色只表达状态，不做装饰
+          · 锁线时整屏变红 —— 这是唯一必须"打扰所有人"的信息
+
+        按 ESC 或 F11 退出全屏。
+    -->
+
+    <Window.Resources>
+        <!-- 步骤卡片：按状态自动上色 -->
+        <DataTemplate x:Key="BigStepCard">
+            <Border x:Name="card" CornerRadius="8" Margin="6,0" Padding="18,14"
+                    MinWidth="150" Background="#1A1A1D" BorderThickness="0,0,0,6"
+                    BorderBrush="#3F3F46">
+                <StackPanel>
+                    <TextBlock x:Name="seqText" Text="{Binding Seq, StringFormat='第 {0} 步'}"
+                               FontSize="18" Foreground="#71717A" HorizontalAlignment="Center"/>
+                    <TextBlock x:Name="nameText" Text="{Binding Name}"
+                               FontSize="26" FontWeight="SemiBold" Foreground="#A1A1AA"
+                               HorizontalAlignment="Center" TextWrapping="Wrap"
+                               TextAlignment="Center" Margin="0,6,0,0"/>
+                    <TextBlock x:Name="stateText" Text="{Binding StateText}"
+                               FontSize="16" Foreground="#52525B"
+                               HorizontalAlignment="Center" Margin="0,8,0,0"/>
+                </StackPanel>
+            </Border>
+
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding StateKey}" Value="ok">
+                    <Setter TargetName="card" Property="BorderBrush" Value="#22C55E"/>
+                    <Setter TargetName="card" Property="Background" Value="#0F2A18"/>
+                    <Setter TargetName="nameText" Property="Foreground" Value="#4ADE80"/>
+                    <Setter TargetName="seqText" Property="Foreground" Value="#22C55E"/>
+                    <Setter TargetName="stateText" Property="Foreground" Value="#22C55E"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding StateKey}" Value="ng">
+                    <Setter TargetName="card" Property="BorderBrush" Value="#EF4444"/>
+                    <Setter TargetName="card" Property="Background" Value="#2E1113"/>
+                    <Setter TargetName="nameText" Property="Foreground" Value="#F87171"/>
+                    <Setter TargetName="seqText" Property="Foreground" Value="#EF4444"/>
+                    <Setter TargetName="stateText" Property="Foreground" Value="#EF4444"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding StateKey}" Value="active">
+                    <Setter TargetName="card" Property="BorderBrush" Value="#F59E0B"/>
+                    <Setter TargetName="card" Property="Background" Value="#2E2308"/>
+                    <Setter TargetName="nameText" Property="Foreground" Value="#FFFFFF"/>
+                    <Setter TargetName="seqText" Property="Foreground" Value="#F59E0B"/>
+                    <Setter TargetName="stateText" Property="Foreground" Value="#FBBF24"/>
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- ============ 顶栏 ============ -->
+        <Border Grid.Row="0" Background="#151518" Padding="28,16">
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <StackPanel Grid.Column="0" Orientation="Horizontal">
+                <TextBlock Text="{Binding ActiveRecipe.ProductModel, FallbackValue='未指定产品'}"
+                           FontSize="26" FontWeight="Bold" Foreground="#E8E8EA"/>
+                <TextBlock Text="　|　" FontSize="26" Foreground="#3F3F46"/>
+                <TextBlock Text="{Binding ActiveRecipe.Name, FallbackValue='未加载配方'}"
+                           FontSize="22" Foreground="#A1A1AA" VerticalAlignment="Center"/>
+            </StackPanel>
+
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="0,0,32,0">
+                <TextBlock Text="批次 " FontSize="20" Foreground="#71717A" VerticalAlignment="Center"/>
+                <TextBlock Text="{Binding BatchNo}" FontSize="22" Foreground="#E8E8EA"
+                           FontWeight="SemiBold" VerticalAlignment="Center"/>
+            </StackPanel>
+
+            <TextBlock Grid.Column="2" x:Name="ClockText" FontSize="26"
+                       Foreground="#E8E8EA" FontWeight="SemiBold" VerticalAlignment="Center"/>
+        </Grid>
+        </Border>
+
+        <!-- ============ 中部：当前步骤（超大） ============ -->
+        <Grid Grid.Row="1">
+            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Margin="40,20">
+
+                <TextBlock Text="{Binding Sop.CurrentStepText}" FontSize="34"
+                           Foreground="#F59E0B" HorizontalAlignment="Center"
+                           FontWeight="SemiBold" Margin="0,0,0,14"/>
+
+                <TextBlock x:Name="CurrentStepName" FontSize="76" FontWeight="Bold"
+                           Foreground="#FFFFFF" HorizontalAlignment="Center"
+                           TextWrapping="Wrap" TextAlignment="Center" MaxWidth="1400"
+                           Text="{Binding Sop.CurrentStep.Name, FallbackValue='全部完成'}"/>
+
+                <Border Background="#1A1A1D" CornerRadius="10" Padding="34,18" Margin="0,34,0,0"
+                        HorizontalAlignment="Center" MaxWidth="1200">
+                    <TextBlock FontSize="32" Foreground="#D4D4D8" TextWrapping="Wrap"
+                               TextAlignment="Center"
+                               Text="{Binding Sop.CurrentHint, FallbackValue=' '}"/>
+                </Border>
+
+                <!-- 最近一次判定理由 -->
+                <TextBlock FontSize="22" Foreground="#71717A" Margin="0,26,0,0"
+                           HorizontalAlignment="Center" TextWrapping="Wrap"
+                           MaxWidth="1100" TextAlignment="Center"
+                           Text="{Binding JudgementReason, FallbackValue=' '}"/>
+            </StackPanel>
+        </Grid>
+
+        <!-- ============ 步骤进度条 ============ -->
+        <ItemsControl Grid.Row="2" ItemsSource="{Binding Sop.Steps}"
+                      ItemTemplate="{StaticResource BigStepCard}"
+                      Margin="22,10,22,16">
+            <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <UniformGrid Rows="1"/>
+                </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+        </ItemsControl>
+
+        <!-- ============ 底栏 ============ -->
+        <Border Grid.Row="3" Background="#151518" Padding="28,14">
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <StackPanel Grid.Column="0" Orientation="Horizontal" Margin="0,0,44,0">
+                <TextBlock Text="合格 " FontSize="20" Foreground="#71717A" VerticalAlignment="Center"/>
+                <TextBlock Text="{Binding OkCount}" FontSize="40" FontWeight="Bold"
+                           Foreground="#22C55E" VerticalAlignment="Center"/>
+            </StackPanel>
+
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="0,0,44,0">
+                <TextBlock Text="不合格 " FontSize="20" Foreground="#71717A" VerticalAlignment="Center"/>
+                <TextBlock Text="{Binding NgCount}" FontSize="40" FontWeight="Bold"
+                           Foreground="#EF4444" VerticalAlignment="Center"/>
+            </StackPanel>
+
+            <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="0,0,44,0">
+                <TextBlock Text="人工放行 " FontSize="20" Foreground="#71717A" VerticalAlignment="Center"/>
+                <TextBlock Text="{Binding Sop.ManualOverrideCount}" FontSize="40" FontWeight="Bold"
+                           Foreground="#F59E0B" VerticalAlignment="Center"/>
+                <TextBlock Text=" 次" FontSize="18" Foreground="#71717A" VerticalAlignment="Bottom"
+                           Margin="4,0,0,8"/>
+            </StackPanel>
+
+            <StackPanel Grid.Column="3" Orientation="Horizontal" HorizontalAlignment="Right"
+                        Margin="0,0,36,0">
+                <Ellipse Width="38" Height="38" VerticalAlignment="Center">
+                    <Ellipse.Style>
+                        <Style TargetType="Ellipse">
+                            <Setter Property="Fill" Value="#3F3F46"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding AlarmSignalKey}" Value="ok">
+                                    <Setter Property="Fill" Value="#22C55E"/>
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding AlarmSignalKey}" Value="warning">
+                                    <Setter Property="Fill" Value="#F59E0B"/>
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding AlarmSignalKey}" Value="fault">
+                                    <Setter Property="Fill" Value="#EF4444"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Ellipse.Style>
+                </Ellipse>
+                <TextBlock Text="{Binding AlarmStatusText}" FontSize="24"
+                           Foreground="#D4D4D8" VerticalAlignment="Center" Margin="14,0,0,0"/>
+            </StackPanel>
+
+            <TextBlock Grid.Column="4" Text="按 ESC 退出全屏" FontSize="16"
+                       Foreground="#3F3F46" VerticalAlignment="Center"/>
+        </Grid>
+        </Border>
+
+        <!-- ============ 锁线全屏遮罩：唯一必须打扰所有人的信息 ============ -->
+        <Border Grid.RowSpan="4" Background="#CCB91C1C"
+                Visibility="{Binding Sop.IsLocked, Converter={StaticResource BoolToVisibility}}">
+            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                <TextBlock Text="⛔" FontSize="140" HorizontalAlignment="Center"/>
+                <TextBlock Text="流程已锁死" FontSize="88" FontWeight="Bold"
+                           Foreground="White" HorizontalAlignment="Center" Margin="0,10,0,0"/>
+                <TextBlock Text="{Binding Sop.CurrentStep.Name}" FontSize="42"
+                           Foreground="#FEE2E2" HorizontalAlignment="Center" Margin="0,24,0,0"/>
+                <TextBlock Text="请修正后重新触发复检" FontSize="34"
+                           Foreground="#FECACA" HorizontalAlignment="Center" Margin="0,18,0,0"/>
+            </StackPanel>
+        </Border>
+    </Grid>
+</Window>

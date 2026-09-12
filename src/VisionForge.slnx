@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/VisionForge.Common/VisionForge.Common.csproj" />
+    <Project Path="src/VisionForge.Core/VisionForge.Core.csproj" />
+    <Project Path="src/VisionForge.Hardware/VisionForge.Hardware.csproj" />
+    <Project Path="src/VisionForge.Infrastructure/VisionForge.Infrastructure.csproj" />
+    <Project Path="src/VisionForge.Main/VisionForge.Main.csproj" />
+  </Folder>
+</Solution>
