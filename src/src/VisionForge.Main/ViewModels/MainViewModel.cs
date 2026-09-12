@@ -819,6 +819,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _cameraWatchdog?.Stop();
         _cameraWatchdog = null;
 
+        // 自学的样本是"攒够 5 秒才写盘"的（见 SaveRoiSamplesThrottled）：
+        // 关软件前必须补写一次，否则刚刚学到的最后几条会随进程一起消失，
+        // 而现场看到的现象是"明明学了，重开就少了几条"。
+        FlushRoiSamples();
+
         // 解绑状态机事件，避免停机过程中回调进来碰已释放的界面状态
         Sop.Alarm -= OnSopAlarm;
 

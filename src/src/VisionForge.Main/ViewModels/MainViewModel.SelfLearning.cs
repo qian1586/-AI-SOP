@@ -292,9 +292,17 @@ public sealed partial class MainViewModel
             return;
         }
 
+        // 一旦判出了结论，"拿不准"的连击就断了。
+        //
+        // 这一步必须发生在"要不要收录"的判断之前：哪怕这一帧因为把握不够而没被收录，
+        // 也说明系统已经能判了。否则那句「连续 N 帧拿不准，建议补样本」会一直挂在界面上 ——
+        // 现场明明已经把样本补齐、系统也判对了，提示还在喊"拿不准"，人就再也不信这句话了。
+        bool wasStuck = _uncertainStreak.TryGetValue(seq, out int previousStreak) && previousStreak >= 30;
+        _uncertainStreak[seq] = 0;
+        if (wasStuck) OnPropertyChanged(nameof(SelfLearnAdviceText));
+
         if (!options.Enabled)
         {
-            _uncertainStreak[seq] = 0;
             return;
         }
 
@@ -323,8 +331,6 @@ public sealed partial class MainViewModel
             TrackRejected(seq, roiName, recognition, result.Reason);
             return;
         }
-
-        _uncertainStreak[seq] = 0;
 
         // 只是"强化"（同一个画面反复出现）时不做任何界面/结构改动 ——
         // 静止画面每秒 25 帧都会命中，这里必须保持零负担。
@@ -358,7 +364,11 @@ public sealed partial class MainViewModel
         RebuildRoiLibrary();
         SaveRoiSamplesThrottled();
         RefreshRoiTargetCounts();
-        RefreshSelectedRoiSamples();
+
+        // 样本条只显示"当前选中那个框"的样本，所以只有学到的正好是它时才重建。
+        // 重建这个列表会让 WPF 把每个缩略图重新从磁盘解码一遍（样本最多 80 张），
+        // 没必要的重建纯属白烧 UI 线程。
+        if (_selectedRoiTarget?.Index == seq) RefreshSelectedRoiSamples();
 
         _log.Info($"自主学习：{result.Reason}");
 
