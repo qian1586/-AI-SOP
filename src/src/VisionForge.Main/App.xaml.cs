@@ -212,6 +212,7 @@ public partial class App : Application
                 Directory.CreateDirectory(Path.GetDirectoryName(smokeReport)!);
 
                 window.Show();
+                window.WindowState = WindowState.Maximized;   // 现场就是最大化用的，量出来才有意义
                 window.UpdateLayout();
 
                 var settleUntil = DateTime.Now.AddMilliseconds(500);
@@ -219,6 +220,37 @@ public partial class App : Application
                 {
                     PumpMessages(window.Dispatcher);
                     System.Threading.Thread.Sleep(25);
+                }
+
+                // ---- 布局体检：量一次"这一栏的内容有没有超出屏幕" ----
+                //
+                // 这类问题（卡片底部被挤出屏幕、按钮看不见）现场报过好几次，
+                // 而它们全都是"内容自然高度 > 容器给的高度"，只能在真开窗口之后量出来。
+                // 这里只记录、不判失败 —— 布局问题不该拦住程序启动，但必须留下证据。
+                string layoutNote = "（没找到现场状态栏，跳过布局体检）";
+                try
+                {
+                    if (window.FindName("SiteStatusCard") is System.Windows.Controls.Border card &&
+                        card.Child is System.Windows.FrameworkElement inner &&
+                        card.ActualHeight > 0)
+                    {
+                        double available = card.ActualHeight - card.Padding.Top - card.Padding.Bottom;
+                        double needed = inner.DesiredSize.Height;
+                        double overflow = needed - available;
+                        string head = overflow > 1
+                            ? $"⚠ 超出 {overflow:F0}px（会被裁掉）"
+                            : $"✔ 放得下（还余 {(-overflow):F0}px）";
+
+                        layoutNote =
+                            $"现场状态栏：容器可用高 {available:F0}px，内容需要 {needed:F0}px —— {head}" +
+                            Environment.NewLine +
+                            $"屏幕 {SystemParameters.PrimaryScreenWidth:F0}×{SystemParameters.PrimaryScreenHeight:F0}，" +
+                            $"窗口 {window.ActualWidth:F0}×{window.ActualHeight:F0}";
+                    }
+                }
+                catch (Exception layoutEx)
+                {
+                    layoutNote = "布局体检本身出错了：" + layoutEx.Message;
                 }
 
                 window.Close();
@@ -230,7 +262,14 @@ public partial class App : Application
                     "（说明 XAML 能解析、资源键都在、转换器都能找到、绑定不会把界面打崩）" + Environment.NewLine,
                     new System.Text.UTF8Encoding(true));
 
+                // 把布局体检结果追加进报告（单独一段，方便一眼看到）
+                File.AppendAllText(smokeReport,
+                    Environment.NewLine + "---------- 布局体检 ----------" + Environment.NewLine +
+                    layoutNote + Environment.NewLine,
+                    new System.Text.UTF8Encoding(true));
+
                 Console.WriteLine("[冒烟自检] 通过：界面能正常打开（XAML / 资源 / 转换器 / 绑定都过了一遍）");
+                Console.WriteLine("[布局体检] " + layoutNote.Replace(Environment.NewLine, " | "));
                 smokeExit = 0;
             }
             catch (Exception ex)

@@ -35,13 +35,13 @@ public sealed class AppSettings
     public int HistoryRetentionCount { get; set; } = 200_000;
 
     /// <summary>
-    /// 界面缩放倍数（1.0 = 100%）。
+    /// 界面缩放倍数（1.0 = 100%，窗口整体等比缩放）。
     ///
-    /// <para>为什么做成可调：工控机的显示器尺寸和观看距离千差万别 ——
-    /// 现场站着看大屏和坐工位看 19 寸屏，需要的字号完全不同。
-    /// 与其反复改代码调字号，不如给现场一个旋钮。默认 1.1（比原始尺寸略大）。</para>
+    /// <para><b>默认就是 100%。</b>界面上那个滑条已经按现场要求撤掉了 ——
+    /// 一旦被误拖大，整个界面会超出屏幕，看起来就像"软件坏了"。
+    /// 显示器真的换了、觉得字小，改 config\appsettings.json 里的这个值即可（0.8~1.6）。</para>
     /// </summary>
-    public double UiScale { get; set; } = 1.1;
+    public double UiScale { get; set; } = 1.0;
 
     // ---------- 硬件 ----------
     public List<CameraInfo> Cameras { get; set; } = new();

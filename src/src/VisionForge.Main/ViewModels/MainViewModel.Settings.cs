@@ -83,10 +83,11 @@ public sealed partial class MainViewModel
     // 系统设置页
     // ==================================================================
     /// <summary>
-    /// 界面缩放倍数（1.0 = 100%）。拖动即时生效并写回配置。
+    /// 界面缩放倍数（1.0 = 100%）。
     ///
-    /// <para>工控机显示器尺寸、观看距离差别很大（站着看大屏 vs 坐工位看 19 寸），
-    /// 所以把字号做成现场可调，而不是写死在代码里。上下限 0.8~1.6 防止拖到看不清。</para>
+    /// <para>界面上的滑条已按现场要求撤掉（默认 100%，怕被误拖大导致界面超出屏幕），
+    /// 但窗口整体的等比缩放仍然由它驱动 —— 所以这个属性必须留着，
+    /// 改 config\appsettings.json 就能生效。上下限 0.8~1.6。</para>
     /// </summary>
     public double UiScale
     {
@@ -100,11 +101,8 @@ public sealed partial class MainViewModel
             _settings.Save();
 
             OnPropertyChanged(nameof(UiScale));
-            OnPropertyChanged(nameof(UiScalePercentText));
         }
     }
-
-    public string UiScalePercentText => _settings.Current.UiScale.ToString("P0");
 
     private void SaveSettings()
     {
