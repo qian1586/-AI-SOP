@@ -264,6 +264,12 @@ public partial class App : Application
                     {
                         layoutNote += $"｜底部历史条高度：{historyStrip.ActualHeight:F0}px";
                     }
+
+                    // 浮层不占布局高度，但它盖住多少画面就是实打实少看多少，所以也要量
+                    if (window.FindName("CameraToolbar") is System.Windows.FrameworkElement cameraToolbar)
+                    {
+                        layoutNote += $"｜画面浮层工具条高度：{cameraToolbar.ActualHeight:F0}px";
+                    }
                 }
                 catch (Exception layoutEx)
                 {

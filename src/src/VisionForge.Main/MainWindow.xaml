@@ -475,6 +475,7 @@
                         变成按钮行的第一个元素 —— 少盖住一条约 26px 的画面。
                     -->
                     <StackPanel Grid.Row="0" HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                                x:Name="CameraToolbar"
                                 Margin="10,0,0,8">
                         <!-- 用 WrapPanel：按钮多了会自动换行，窄屏也不会把右边的按钮挤没 -->
                         <WrapPanel>
@@ -485,19 +486,25 @@
                                            FontSize="10" FontWeight="SemiBold"/>
                             </Border>
 
-                            <Border Background="#CC0A101A" CornerRadius="4" Padding="7,3" Margin="0,0,0,4">
+                            <!--
+                                这条浮层工具条原来每个按钮都是「内边距 14,7 + 12px 字」，
+                                整行约 37px 高 —— 而它是**盖在相机画面上的**，盖住多少就少看多少。
+                                现在统一收到「9,3 + 10px 字」，整行约 22px，少盖住约 15px 画面。
+                                （只动这一排，不改 ToolButton 样式本身，免得影响别处的按钮。）
+                            -->
+                            <Border Background="#CC0A101A" CornerRadius="4" Padding="6,2" Margin="0,0,0,3">
                                 <StackPanel Orientation="Horizontal">
-                                    <Ellipse Width="8" Height="8" Fill="#EF4444" Margin="0,0,6,0"
+                                    <Ellipse Width="7" Height="7" Fill="#EF4444" Margin="0,0,5,0"
                                              VerticalAlignment="Center"/>
                                     <TextBlock Text="LIVE" Foreground="{StaticResource TextPrimary}"
-                                               FontSize="12" FontWeight="Bold"
-                                               VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                               FontSize="10" FontWeight="Bold"
+                                               VerticalAlignment="Center" Margin="0,0,8,0"/>
                                     <TextBlock Text="●" Foreground="{StaticResource TextMuted}"
-                                               FontSize="12" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                               FontSize="10" VerticalAlignment="Center" Margin="0,0,8,0"/>
                                     <TextBlock Text="◐" Foreground="{StaticResource TextMuted}"
-                                               FontSize="12" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                               FontSize="10" VerticalAlignment="Center" Margin="0,0,8,0"/>
                                     <TextBlock Text="✕" Foreground="{StaticResource TextMuted}"
-                                               FontSize="12" VerticalAlignment="Center"/>
+                                               FontSize="10" VerticalAlignment="Center"/>
                                 </StackPanel>
                             </Border>
 
@@ -505,47 +512,41 @@
                             <Button Style="{StaticResource ToolButton}"
                                     Content="{Binding RoiEditButtonText}"
                                     Command="{Binding ToggleRoiEditCommand}"
-                                    Margin="8,0,0,6"
-                                    FontSize="11"/>
+                                    Margin="6,0,0,3" Padding="9,3" FontSize="10"/>
 
                             <!-- 清空 ROI（仅编辑模式显示） -->
                             <Button Style="{StaticResource ToolButton}"
                                     Content="清空 ROI"
                                     Command="{Binding ClearRoisCommand}"
-                                    Margin="6,0,0,6"
-                                    FontSize="11"
+                                    Margin="5,0,0,3" Padding="9,3" FontSize="10"
                                     Visibility="{Binding IsRoiEditMode, Converter={StaticResource BoolToVisibility}}"/>
 
                             <!-- 导入现场照片当底图：没相机也能标位置、也能判定 -->
                             <Button Style="{StaticResource ToolButton}"
                                     Content="📷 导入现场图片"
                                     Command="{Binding ImportSceneImageCommand}"
-                                    Margin="6,0,0,6"
-                                    FontSize="11"
+                                    Margin="5,0,0,3" Padding="9,3" FontSize="10"
                                     ToolTip="导一张工位实拍图，在图上框出抓取位置 —— 没有相机也能先把工位建起来"/>
 
                             <!-- 切回相机画面 -->
                             <Button Style="{StaticResource ToolButton}"
                                     Content="⟲ 回到相机画面"
                                     Command="{Binding UseCameraPreviewCommand}"
-                                    Margin="6,0,0,6"
-                                    FontSize="11"
+                                    Margin="5,0,0,3" Padding="9,3" FontSize="10"
                                     ToolTip="照片只是标定用的底图；看完点这里回到相机实时画面"/>
 
                             <!-- 把框同步成判定区域：人手进区域即判定 -->
                             <Button Style="{StaticResource PrimaryButton}"
                                     Content="⇄ 同步为判定区域"
                                     Command="{Binding SyncRoisToTargetsCommand}"
-                                    Margin="6,0,0,6"
-                                    FontSize="11"
+                                    Margin="5,0,0,3" Padding="9,3" FontSize="10"
                                     ToolTip="把画好的框变成判定区域：人手进入某个框并停留够时间，就算这一步做到了"/>
 
                             <!-- 框的显隐 -->
                             <Button Style="{StaticResource ToolButton}"
                                     Content="{Binding ShowRoiBoxesButtonText}"
                                     Command="{Binding ToggleShowRoiBoxesCommand}"
-                                    Margin="6,0,0,6"
-                                    FontSize="11"
+                                    Margin="5,0,0,3" Padding="9,3" FontSize="10"
                                     ToolTip="画面上的框挡住视线时可以隐藏；判定逻辑不受影响"/>
                         </WrapPanel>
                     </StackPanel>
