@@ -189,15 +189,22 @@ public static class DemoDataFactory
 
             action += (action == "未改动" ? "" : "，") + "已生成过程层规则（不含作业位，等框完之后同步）";
         }
-        else if (ArePlaceholderTargets(LoadRule(ruleJsonPath)))
+        else
         {
-            // 同理：老版本预置的 6 个作业位也要清掉，作业位同样由现场框出来
+            // 同理：老版本预置的 6 个作业位也要清掉，作业位同样由现场框出来。
+            //
+            // 这里刻意只读一次文件再判断：原来写成 `else if (ArePlaceholderTargets(LoadRule(...)))`
+            // 之后又在分支里 LoadRule 一遍 —— 既多读一次盘，也让编译器无法确定
+            // 那个值不是 null（于是报了 CS8602 可空警告）。
             var rule = LoadRule(ruleJsonPath);
-            rule.Targets.Clear();
-            rule.Steps.Clear();
-            rule.Required.Clear();
-            ProcessConfigStore.SaveJson(rule, ruleJsonPath);
-            action += (action == "未改动" ? "" : "，") + "已清掉预置的 6 个作业位（框完后点「同步为判定区域」）";
+            if (rule is not null && ArePlaceholderTargets(rule))
+            {
+                rule.Targets.Clear();
+                rule.Steps.Clear();
+                rule.Required.Clear();
+                ProcessConfigStore.SaveJson(rule, ruleJsonPath);
+                action += (action == "未改动" ? "" : "，") + "已清掉预置的 6 个作业位（框完后点「同步为判定区域」）";
+            }
         }
 
         return action;

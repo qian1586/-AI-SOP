@@ -1,4 +1,4 @@
-﻿<Window x:Class="VisionForge.Main.MainWindow"
+<Window x:Class="VisionForge.Main.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
@@ -962,17 +962,17 @@
                                                    VerticalAlignment="Center" Margin="0,0,8,4"/>
 
                                         <Button Style="{StaticResource ToolButton}"
-                                                Content="{Binding SelfLearnToggleText}"
+                                                Content="{Binding SelfLearningToggleText}"
                                                 Command="{Binding ToggleSelfLearningCommand}"
                                                 Padding="8,3" FontSize="10" Margin="0,0,8,4"
                                                 ToolTip="关掉之后一帧都不收，行为和以前完全一样（已经收到的样本还继续用于识别）"/>
 
-                                        <CheckBox Content="自动收 OK" IsChecked="{Binding SelfLearnAutoOkEnabled}"
+                                        <CheckBox Content="自动收 OK" IsChecked="{Binding SelfLearningAutoOkEnabled}"
                                                   Foreground="{StaticResource TextPrimary}" FontSize="10"
                                                   VerticalAlignment="Center" Margin="0,0,10,4"
                                                   ToolTip="系统判 OK 而且有把握、这一步又确实完成 → 自动把这一帧收成 OK 样本（正常生产就是教材）"/>
 
-                                        <CheckBox Content="自动收 NG（慎用）" IsChecked="{Binding SelfLearnAutoNgEnabled}"
+                                        <CheckBox Content="自动收 NG（慎用）" IsChecked="{Binding SelfLearningAutoNgEnabled}"
                                                   Foreground="{StaticResource TextPrimary}" FontSize="10"
                                                   VerticalAlignment="Center" Margin="0,0,10,4"
                                                   ToolTip="默认关：万一系统误报一次 NG，学进去就再也洗不掉。确认这批 NG 是真的再打开"/>
@@ -980,14 +980,14 @@
                                         <TextBlock Text="把握门槛" Foreground="{StaticResource TextMuted}"
                                                    FontSize="10" VerticalAlignment="Center" Margin="0,0,4,4"/>
                                         <TextBox Style="{StaticResource DarkInput}" Width="46" Margin="0,0,10,4"
-                                                 Text="{Binding SelfLearnMinConfidence, UpdateSourceTrigger=LostFocus}"
+                                                 Text="{Binding SelfLearningMinConfidence, UpdateSourceTrigger=LostFocus}"
                                                  ToolTip="0.5~0.99。低于它的帧一律不学 —— 只从有把握的帧里学，这是防越学越错的第一道闸"/>
 
                                         <TextBlock Text="每类上限" Foreground="{StaticResource TextMuted}"
                                                    FontSize="10" VerticalAlignment="Center" Margin="0,0,4,4"/>
                                         <TextBox Style="{StaticResource DarkInput}" Width="42" Margin="0,0,10,4"
-                                                 Text="{Binding SelfLearnMaxPerClass, UpdateSourceTrigger=LostFocus}"
-                                                 ToolTip="每个框、每类最多留多少条自学样本。到顶后自动淘汰最冗余的那条，样本库不会无限长大"/>
+                                                 Text="{Binding SelfLearningMaxPerClass, UpdateSourceTrigger=LostFocus}"
+                                                 ToolTip="每个框、每类最多留多少条自学样本。到顶后自动淘汰「被见到次数最少」的那条（偶发画面优先走，常态画面留下），样本库不会无限长大，也不会越跑越慢"/>
 
                                         <Button Style="{StaticResource ToolButton}" Content="↩ 撤销上次"
                                                 Command="{Binding UndoLastAutoSampleCommand}"
@@ -1021,13 +1021,13 @@
                                                 ToolTip="对着当前选中的框：刚才那一帧其实是错的 → 直接记成 NG 纠错样本"/>
                                     </WrapPanel>
 
-                                    <TextBlock Text="{Binding SelfLearnStatsText}"
+                                    <TextBlock Text="{Binding SelfLearningStatsText}"
                                                Foreground="{StaticResource TextSecond}"
                                                FontSize="10" Margin="0,2,0,0" TextWrapping="Wrap"/>
-                                    <TextBlock Text="{Binding SelfLearnAdviceText}"
+                                    <TextBlock Text="{Binding SelfLearningAdviceText}"
                                                Foreground="{StaticResource TextAccent}"
                                                FontSize="10" Margin="0,2,0,0" TextWrapping="Wrap"/>
-                                    <TextBlock Text="{Binding SelfLearnLastReasonText}"
+                                    <TextBlock Text="{Binding SelfLearningLastReasonText}"
                                                Foreground="{StaticResource TextMuted}"
                                                FontSize="10" Margin="0,2,0,0" TextWrapping="Wrap"/>
                                 </StackPanel>

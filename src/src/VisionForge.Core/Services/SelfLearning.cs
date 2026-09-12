@@ -36,6 +36,20 @@ public static class SampleSource
 /// </summary>
 public sealed class SelfLearningOptions
 {
+    // ---- 允许范围（界面上的输入框按这些钳位；引擎本身不偷偷改调用方给的值）----
+
+    /// <summary>把握门槛允许的最低值。</summary>
+    public const double MinConfidenceFloor = 0.50;
+
+    /// <summary>把握门槛允许的最高值（留 1% 余地，避免"必须 100% 才学"这种永远学不到东西的配置）。</summary>
+    public const double MinConfidenceCeiling = 0.99;
+
+    /// <summary>每类样本上限允许的最小值。</summary>
+    public const int MaxPerClassFloor = 5;
+
+    /// <summary>每类样本上限允许的最大值（再多也只会更慢，识别率不会更好）。</summary>
+    public const int MaxPerClassCeiling = 200;
+
     /// <summary>总开关。关掉之后一帧都不收，行为和旧版本完全一致。</summary>
     public bool Enabled { get; set; } = true;
 
@@ -208,8 +222,13 @@ public static class SelfLearningEngine
         }
 
         // ---- 数量封顶：先腾位置，再放新的 ----
+        //
+        // 引擎不替调用方"修正"上限值：给 3 就是 3。
+        // （界面上那个输入框负责把用户填的数字钳到合理范围，见 SelfLearningOptions 里的常量。
+        //  引擎里再钳一次只会让"到底按哪个数生效"变得说不清。）
         RoiSample? evicted = null;
-        if (sameClass.Count >= Math.Max(2, options.MaxPerClass))
+        int cap = options.MaxPerClass > 0 ? options.MaxPerClass : 1;
+        if (sameClass.Count >= cap)
         {
             evicted = PickEvictionCandidate(sameClass);
             if (evicted is null)
@@ -217,7 +236,7 @@ public static class SelfLearningEngine
                 return new SelfLearningResult
                 {
                     Decision = SelfLearningDecision.Rejected,
-                    Reason = $"这个框的 {SampleClass(isOk)} 样本已有 {sameClass.Count} 条（上限 {options.MaxPerClass}），" +
+                    Reason = $"这个框的 {SampleClass(isOk)} 样本已有 {sameClass.Count} 条（上限 {cap}），" +
                              "而且都是人工教的 —— 请先人工清理，系统不会动人工样本",
                 };
             }
@@ -362,38 +381,33 @@ public static class SelfLearningEngine
     /// <summary>
     /// 从同一框、同一类的样本里挑一条"最该淘汰"的。
     ///
-    /// <para>只挑自学的；一条自学样本都没有就返回 null（人工样本一律不动）。
-    /// 挑法是"最冗余优先"：算每条和同组其它样本的最大相似度，
-    /// 谁和别人最像谁最没信息量，先淘汰谁；并列时淘汰更早的那条。</para>
+    /// <para>只挑自学的；一条自学样本都没有就返回 null（人工样本一律不动）。</para>
+    ///
+    /// <para><b>挑法：被见到次数最少（Hits 最小）的优先淘汰</b>，并列时淘汰更早的那条。
+    /// 直觉是"一个画面反复出现说明它是常态，只见过一次的样本最可能是偶发情况"；
+    /// 而且这和去重是配套的 —— 相似的画面不会新增样本，只会强化已有那条的 Hits，
+    /// 所以 Hits 天然就是"这个样本代表的情况有多常见"。</para>
+    ///
+    /// <para><b>为什么不用"和同组其它样本最像的那条"：</b>那个判据要算两两相似度，
+    /// 是 O(n²) —— 每个框每类 80 条时，一次淘汰要算 6400 次 193 维相似度；
+    /// 把上限调到 200 就是 40000 次，而这段代码跑在界面线程上，会真真切切卡一下。
+    /// 现在这个判据是 O(n)，上限调到多少都不会有这个问题。</para>
     /// </summary>
     private static RoiSample? PickEvictionCandidate(IReadOnlyList<RoiSample> sameClass)
     {
         RoiSample? worst = null;
-        double worstScore = double.NegativeInfinity;
 
         foreach (var candidate in sameClass)
         {
             if (candidate.Source != SampleSource.Auto) continue;
             if (candidate.Feature.Length == 0) return candidate;   // 坏样本优先清掉
 
-            double maxSimilarity = 0;
-            foreach (var other in sameClass)
-            {
-                if (ReferenceEquals(other, candidate)) continue;
-                double similarity = FrameFeature.Similarity(candidate.Feature, other.Feature);
-                if (similarity > maxSimilarity) maxSimilarity = similarity;
-            }
-
             bool better =
                 worst is null
-                || maxSimilarity > worstScore + 1e-9
-                || (Math.Abs(maxSimilarity - worstScore) <= 1e-9 && candidate.Timestamp < worst.Timestamp);
+                || candidate.Hits < worst.Hits
+                || (candidate.Hits == worst.Hits && candidate.Timestamp < worst.Timestamp);
 
-            if (better)
-            {
-                worst = candidate;
-                worstScore = maxSimilarity;
-            }
+            if (better) worst = candidate;
         }
 
         return worst;

@@ -46,6 +46,25 @@ public sealed partial class MainViewModel
     /// </summary>
     private readonly Dictionary<string, DateTime> _journalThrottle = new();
 
+    /// <summary>
+    /// 每个框最近一次"送去自学"的时刻 —— 给自学限速用（见 <see cref="SelfLearningInterval"/>）。
+    /// </summary>
+    private readonly Dictionary<int, DateTime> _lastLearnAt = new();
+
+    /// <summary>
+    /// 同一个框最多多久送一次自学。
+    ///
+    /// <para><b>为什么要限速：</b>自学是逐帧跑的，而相邻两帧的画面几乎一模一样 ——
+    /// 送进去也只会被判成"同一个情况又见了一次"（强化），功能上零收益。
+    /// 但每一帧都要付出：复制一份样本列表 + 跟几十条样本逐一算 193 维相似度 + 一堆 LINQ 临时对象。
+    /// 一个工位 9 个框、25 帧/秒，就是每秒两百多次这种计算，全是白烧的 CPU 和 GC。
+    /// 7×24 跑下来，垃圾回收压力会实实在在拖慢界面。</para>
+    ///
+    /// <para>1 秒一次对"边生产边学"完全够用：一个动作持续几秒到几十秒，
+    /// 而真正有区别的画面（零件放上去 / 被拿走）一定会跨越多个 1 秒窗口。</para>
+    /// </summary>
+    private static readonly TimeSpan SelfLearningInterval = TimeSpan.FromSeconds(1);
+
     private DateTime _lastRoiSampleSave = DateTime.MinValue;
     private bool _roiSamplesDirty;
 
@@ -77,59 +96,63 @@ public sealed partial class MainViewModel
 
     // ------------------------------------------------------------------ 开关（直接读写配置）
 
-    private SelfLearningOptions SelfLearnOptions => _settings.Current.SelfLearning;
+    private SelfLearningOptions LearningOptions => _settings.Current.SelfLearning;
 
     /// <summary>自学总开关。</summary>
     public bool SelfLearningEnabled
     {
-        get => SelfLearnOptions.Enabled;
-        set => SetSelfLearnOption(() => SelfLearnOptions.Enabled = value,
-                                  () => SelfLearnOptions.Enabled, value);
+        get => LearningOptions.Enabled;
+        set => SetLearningOption(() => LearningOptions.Enabled = value,
+                                  () => LearningOptions.Enabled, value);
     }
 
     /// <summary>自动收录 OK 样本。</summary>
-    public bool SelfLearnAutoOkEnabled
+    public bool SelfLearningAutoOkEnabled
     {
-        get => SelfLearnOptions.AutoCollectOk;
-        set => SetSelfLearnOption(() => SelfLearnOptions.AutoCollectOk = value,
-                                  () => SelfLearnOptions.AutoCollectOk, value);
+        get => LearningOptions.AutoCollectOk;
+        set => SetLearningOption(() => LearningOptions.AutoCollectOk = value,
+                                  () => LearningOptions.AutoCollectOk, value);
     }
 
     /// <summary>自动收录 NG 样本（默认关：误报学进去就洗不掉了）。</summary>
-    public bool SelfLearnAutoNgEnabled
+    public bool SelfLearningAutoNgEnabled
     {
-        get => SelfLearnOptions.AutoCollectNg;
-        set => SetSelfLearnOption(() => SelfLearnOptions.AutoCollectNg = value,
-                                  () => SelfLearnOptions.AutoCollectNg, value);
+        get => LearningOptions.AutoCollectNg;
+        set => SetLearningOption(() => LearningOptions.AutoCollectNg = value,
+                                  () => LearningOptions.AutoCollectNg, value);
     }
 
     /// <summary>自学置信度门槛（0~1）。低于它的帧一条都不收。</summary>
-    public double SelfLearnMinConfidence
+    public double SelfLearningMinConfidence
     {
-        get => SelfLearnOptions.MinConfidence;
+        get => LearningOptions.MinConfidence;
         set
         {
-            double clamped = Math.Clamp(Math.Round(value, 2), 0.5, 0.99);
-            SetSelfLearnOption(() => SelfLearnOptions.MinConfidence = clamped,
-                               () => SelfLearnOptions.MinConfidence, clamped);
+            double clamped = Math.Clamp(Math.Round(value, 2),
+                                        SelfLearningOptions.MinConfidenceFloor,
+                                        SelfLearningOptions.MinConfidenceCeiling);
+            SetLearningOption(() => LearningOptions.MinConfidence = clamped,
+                               () => LearningOptions.MinConfidence, clamped);
         }
     }
 
     /// <summary>每个框、每类最多留多少条自学样本。</summary>
-    public int SelfLearnMaxPerClass
+    public int SelfLearningMaxPerClass
     {
-        get => SelfLearnOptions.MaxPerClass;
+        get => LearningOptions.MaxPerClass;
         set
         {
-            int clamped = Math.Clamp(value, 5, 200);
-            SetSelfLearnOption(() => SelfLearnOptions.MaxPerClass = clamped,
-                               () => SelfLearnOptions.MaxPerClass, clamped);
+            int clamped = Math.Clamp(value,
+                                     SelfLearningOptions.MaxPerClassFloor,
+                                     SelfLearningOptions.MaxPerClassCeiling);
+            SetLearningOption(() => LearningOptions.MaxPerClass = clamped,
+                               () => LearningOptions.MaxPerClass, clamped);
         }
     }
 
-    public string SelfLearnMinConfidenceText => SelfLearnOptions.MinConfidence.ToString("P0");
+    public string SelfLearningMinConfidenceText => LearningOptions.MinConfidence.ToString("P0");
 
-    public string SelfLearnToggleText => SelfLearningEnabled ? "🤖 自学：开" : "🤖 自学：关";
+    public string SelfLearningToggleText => SelfLearningEnabled ? "🤖 自学：开" : "🤖 自学：关";
 
     /// <summary>当前配方里有没有自学样本（决定"撤销/清空/固化"能不能点）。</summary>
     public bool HasAutoSamples =>
@@ -143,7 +166,7 @@ public sealed partial class MainViewModel
 
     // ------------------------------------------------------------------ 文案
 
-    public string SelfLearnStatsText
+    public string SelfLearningStatsText
     {
         get
         {
@@ -157,13 +180,13 @@ public sealed partial class MainViewModel
         }
     }
 
-    public string SelfLearnLastReasonText => _selfLearnStats.LastReason;
+    public string SelfLearningLastReasonText => _selfLearnStats.LastReason;
 
     /// <summary>
     /// 给现场的一句话建议（这是自学最实用的输出）：
     /// 它直接回答"我该去教哪个框"。
     /// </summary>
-    public string SelfLearnAdviceText
+    public string SelfLearningAdviceText
     {
         get
         {
@@ -204,10 +227,10 @@ public sealed partial class MainViewModel
             _log.Warn("自学账本载入失败：" + ex.Message);
         }
 
-        RaiseSelfLearnProps();
+        RaiseSelfLearningProps();
     }
 
-    private void SetSelfLearnOption(Action apply, Func<bool> readBool, bool value)
+    private void SetLearningOption(Action apply, Func<bool> readBool, bool value)
     {
         bool before = readBool();
         if (before == value) return;
@@ -215,27 +238,27 @@ public sealed partial class MainViewModel
         apply();
         _settings.Save();
 
-        _log.Info($"自主学习设置变更：{(value ? "开启" : "关闭")}（{nameof(SetSelfLearnOption)}）");
-        RaiseSelfLearnProps();
+        _log.Info($"自主学习设置变更：{(value ? "开启" : "关闭")}（{nameof(SetLearningOption)}）");
+        RaiseSelfLearningProps();
     }
 
     /// <summary>double / int 版的重载（泛型会装箱，这里图个直白）。</summary>
-    private void SetSelfLearnOption(Action apply, Func<double> read, double value)
+    private void SetLearningOption(Action apply, Func<double> read, double value)
     {
         if (Math.Abs(read() - value) < 1e-9) return;
 
         apply();
         _settings.Save();
-        RaiseSelfLearnProps();
+        RaiseSelfLearningProps();
     }
 
-    private void SetSelfLearnOption(Action apply, Func<int> read, int value)
+    private void SetLearningOption(Action apply, Func<int> read, int value)
     {
         if (read() == value) return;
 
         apply();
         _settings.Save();
-        RaiseSelfLearnProps();
+        RaiseSelfLearningProps();
     }
 
     private void ToggleSelfLearning()
@@ -246,18 +269,18 @@ public sealed partial class MainViewModel
             : "AI 自主学习已关闭：不再自动收样本（已收的仍然参与识别）";
     }
 
-    private void RaiseSelfLearnProps()
+    private void RaiseSelfLearningProps()
     {
         OnPropertyChanged(nameof(SelfLearningEnabled));
-        OnPropertyChanged(nameof(SelfLearnAutoOkEnabled));
-        OnPropertyChanged(nameof(SelfLearnAutoNgEnabled));
-        OnPropertyChanged(nameof(SelfLearnMinConfidence));
-        OnPropertyChanged(nameof(SelfLearnMinConfidenceText));
-        OnPropertyChanged(nameof(SelfLearnMaxPerClass));
-        OnPropertyChanged(nameof(SelfLearnToggleText));
-        OnPropertyChanged(nameof(SelfLearnStatsText));
-        OnPropertyChanged(nameof(SelfLearnLastReasonText));
-        OnPropertyChanged(nameof(SelfLearnAdviceText));
+        OnPropertyChanged(nameof(SelfLearningAutoOkEnabled));
+        OnPropertyChanged(nameof(SelfLearningAutoNgEnabled));
+        OnPropertyChanged(nameof(SelfLearningMinConfidence));
+        OnPropertyChanged(nameof(SelfLearningMinConfidenceText));
+        OnPropertyChanged(nameof(SelfLearningMaxPerClass));
+        OnPropertyChanged(nameof(SelfLearningToggleText));
+        OnPropertyChanged(nameof(SelfLearningStatsText));
+        OnPropertyChanged(nameof(SelfLearningLastReasonText));
+        OnPropertyChanged(nameof(SelfLearningAdviceText));
         OnPropertyChanged(nameof(HasAutoSamples));
 
         (UndoLastAutoSampleCommand as RelayCommand)?.RaiseCanExecuteChanged();
@@ -276,7 +299,7 @@ public sealed partial class MainViewModel
     /// </summary>
     private void LearnFromRoiObservation(int seq, string roiName, float[] feature, ActionRecognition recognition)
     {
-        var options = SelfLearnOptions;
+        var options = LearningOptions;
 
         // 拿不准的帧：记一笔（用于"该教哪个框"的提示），但绝不入库
         if (recognition.IsOk is null)
@@ -286,7 +309,7 @@ public sealed partial class MainViewModel
 
             // 每攒够 30 帧刷新一次提示文案（"第 N 个框拿不准，建议补样本"）。
             // 逐帧刷新会白白重排界面，攒着刷新既省又足够及时。
-            if (streak % 30 == 0) OnPropertyChanged(nameof(SelfLearnAdviceText));
+            if (streak % 30 == 0) OnPropertyChanged(nameof(SelfLearningAdviceText));
 
             if (options.Enabled) TrackRejected(seq, roiName, recognition, "系统判「无法判定」，这一帧不学");
             return;
@@ -299,12 +322,21 @@ public sealed partial class MainViewModel
         // 现场明明已经把样本补齐、系统也判对了，提示还在喊"拿不准"，人就再也不信这句话了。
         bool wasStuck = _uncertainStreak.TryGetValue(seq, out int previousStreak) && previousStreak >= 30;
         _uncertainStreak[seq] = 0;
-        if (wasStuck) OnPropertyChanged(nameof(SelfLearnAdviceText));
+        if (wasStuck) OnPropertyChanged(nameof(SelfLearningAdviceText));
 
         if (!options.Enabled)
         {
             return;
         }
+
+        // 限速：同一个框一秒最多送一次自学。
+        //
+        // 注意位置 —— 必须在"拿不准"那段计数之后：那句「连续 N 帧拿不准」是按帧统计的，
+        // 要如实反映现场，不能被限速改掉。
+        var now = DateTime.Now;
+        if (_lastLearnAt.TryGetValue(seq, out var lastLearn) && now - lastLearn < SelfLearningInterval)
+            return;
+        _lastLearnAt[seq] = now;
 
         // 这一步是不是"正常完成了"（OK 样本只在步骤确实完成时才收）
         var step = Sop.Steps.FirstOrDefault(s => s.Seq == seq);
@@ -336,7 +368,7 @@ public sealed partial class MainViewModel
         // 静止画面每秒 25 帧都会命中，这里必须保持零负担。
         if (result.Decision == SelfLearningDecision.Reinforced)
         {
-            OnPropertyChanged(nameof(SelfLearnLastReasonText));
+            OnPropertyChanged(nameof(SelfLearningLastReasonText));
 
             WriteJournal(new LearningJournalEntry
             {
@@ -384,7 +416,7 @@ public sealed partial class MainViewModel
             Reason = result.Reason,
         });
 
-        RaiseSelfLearnProps();
+        RaiseSelfLearningProps();
     }
 
     /// <summary>
@@ -421,7 +453,7 @@ public sealed partial class MainViewModel
         while (LearningJournal.Count > 200) LearningJournal.RemoveAt(LearningJournal.Count - 1);
 
         _selfLearnStats.LastReason = entry.Reason;
-        OnPropertyChanged(nameof(SelfLearnLastReasonText));
+        OnPropertyChanged(nameof(SelfLearningLastReasonText));
 
         string dir = LearningJournalStore.DirectoryOf(_settings.Current.DataRoot);
         if (!LearningJournalStore.Append(entry, dir))
@@ -456,7 +488,7 @@ public sealed partial class MainViewModel
         SaveRoiSamples();
         RefreshRoiTargetCounts();
         RefreshSelectedRoiSamples();
-        RaiseSelfLearnProps();
+        RaiseSelfLearningProps();
 
         WriteJournal(new LearningJournalEntry
         {
@@ -493,7 +525,7 @@ public sealed partial class MainViewModel
         SaveRoiSamples();
         RefreshRoiTargetCounts();
         RefreshSelectedRoiSamples();
-        RaiseSelfLearnProps();
+        RaiseSelfLearningProps();
 
         WriteJournal(new LearningJournalEntry
         {
@@ -525,7 +557,7 @@ public sealed partial class MainViewModel
         SaveRoiSamples();
         RefreshRoiTargetCounts();
         RefreshSelectedRoiSamples();
-        RaiseSelfLearnProps();
+        RaiseSelfLearningProps();
 
         WriteJournal(new LearningJournalEntry
         {

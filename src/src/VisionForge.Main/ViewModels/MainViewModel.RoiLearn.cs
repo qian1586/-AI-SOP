@@ -285,7 +285,7 @@ public sealed partial class MainViewModel
         (ToggleRoiLearnCommand as RelayCommand)?.RaiseCanExecuteChanged();
 
         // 换配方 / 增删框之后，"有没有自学样本"这件事可能变了（撤销/清空/固化按钮的可用状态）
-        RaiseSelfLearnProps();
+        RaiseSelfLearningProps();
     }
 
     private void RefreshRoiTargetCounts()
@@ -424,7 +424,7 @@ public sealed partial class MainViewModel
                     Reason = $"人工纠错：系统原判 {was}，人改成 {sample.Label}（这是最值钱的样本，不会被自动淘汰）",
                 });
 
-                RaiseSelfLearnProps();
+                RaiseSelfLearningProps();
             }
 
             _log.Info($"区域学习：第 {target.Index} 个框「{roi.Name}」记 {sample.Label} 样本" +
@@ -519,6 +519,7 @@ public sealed partial class MainViewModel
         // 否则"刚学到的最后两条"会在断电/关软件时丢掉。
         FlushRoiSamples();
         _uncertainStreak.Clear();
+        _lastLearnAt.Clear();          // 下次开始识别时立刻就能学（不用等满一秒）
 
         _log.Info("区域学习识别已停止：" + reason);
     }

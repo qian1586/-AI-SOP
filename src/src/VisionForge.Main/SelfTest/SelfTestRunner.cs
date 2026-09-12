@@ -481,11 +481,12 @@ public sealed class SelfTestRunner
         }
 
         SelfLearningObservation Obs(float[] feature, bool? judge, double confidence,
-                                    bool stepCompleted = true, string source = SampleSource.Auto)
+                                    bool stepCompleted = true, string source = SampleSource.Auto,
+                                    int roi = 1)
             => new()
             {
                 RecipeId = "自检配方",
-                RoiIndex = 1,
+                RoiIndex = roi,
                 RoiName = "自检框",
                 Feature = feature,
                 Judge = judge,
@@ -565,7 +566,7 @@ public sealed class SelfTestRunner
         int okInCapPool = capPool.Count(s => s.IsOk);
         bool manualSurvived = capPool.Any(s => s.Source == SampleSource.Manual);
 
-        Check("AI-04 样本封顶：每框每类到顶后自动淘汰「最冗余」的自学样本；人工教的样本一条都不动",
+        Check("AI-04 样本封顶：每框每类到顶后自动淘汰「最没价值」的自学样本（被见到次数最少的先走）；人工教的样本一条都不动",
             okInCapPool <= 3 && manualSurvived && evictedTimes > 0,
             $"上限 3 条，连收 8 条后该类剩 {okInCapPool} 条（淘汰发生 {evictedTimes} 次），" +
             $"人工样本还在={manualSurvived}");
@@ -677,16 +678,112 @@ public sealed class SelfTestRunner
             var stillPresent = afterLearner.Recognize(presentFeature);
             var stillAbsent = afterLearner.Recognize(absentFeature);
 
-            Check("AI-08 真实链路：系统有把握时自学一条新样本，之后「有东西=OK / 空框=NG」照旧判得对（自学不会把判定带偏）",
-                autoLearned.Decision == SelfLearningDecision.Added
-                && liveSamples.Count == 3
+            // 这里必须是 Reinforced 而不是 Added：同一帧的特征相似度是 100%，
+            // 属于"同一个情况又见了一次"，按设计只强化、不新增。
+            // （第一版这条用例写成了"应该新增"，结果自检直接报红 —— 是测试写错了，不是代码错了。）
+            Check("AI-08 真实链路：同一画面自学只强化不新增（相似度 100%），之后「有东西=OK / 空框=NG」照旧判得对",
+                autoLearned.Decision == SelfLearningDecision.Reinforced
+                && liveSamples.Count == 2
                 && stillPresent.IsOk == true
                 && stillAbsent.IsOk == false,
                 $"自学结果={autoLearned.Decision}（{autoLearned.Reason}）；" +
                 $"自学后有东西→{stillPresent.IsOk?.ToString() ?? "无法判定"}({stillPresent.Confidence:P0})，" +
                 $"空框→{stillAbsent.IsOk?.ToString() ?? "无法判定"}({stillAbsent.Confidence:P0})，" +
                 $"样本 {liveSamples.Count} 条");
+
+            // 换一帧"确实不一样"的画面（193 维随机方向，和现有样本几乎正交）：
+            // 这次必须真的新增一条，而且新增之后原来的判定不能被动摇。
+            var freshFeature = FakeFeature(777);
+            var freshLearned = SelfLearningEngine.Apply(liveSamples,
+                Obs(freshFeature, true, 0.99), learnOptions);
+
+            liveLibrary.Rebuild(liveSamples, 0.75);
+            var afterFresh = liveLibrary.Get(1)!;
+            var stillPresentAfterFresh = afterFresh.Recognize(presentFeature);
+            var stillAbsentAfterFresh = afterFresh.Recognize(absentFeature);
+
+            Check("AI-09 自学新增一条真样本之后：样本库确实长了，而原来教对的判定（有东西=OK / 空框=NG）一点没被带偏",
+                freshLearned.Decision == SelfLearningDecision.Added
+                && liveSamples.Count == 3
+                && stillPresentAfterFresh.IsOk == true
+                && stillAbsentAfterFresh.IsOk == false,
+                $"新增结果={freshLearned.Decision}，样本 {liveSamples.Count} 条；" +
+                $"新增后有东西→{stillPresentAfterFresh.IsOk?.ToString() ?? "无法判定"}({stillPresentAfterFresh.Confidence:P0})，" +
+                $"空框→{stillAbsentAfterFresh.IsOk?.ToString() ?? "无法判定"}({stillAbsentAfterFresh.Confidence:P0})");
         }
+
+        // ---- AI-10 压力与耗时：这是 7×24 连跑最需要盯的一项 ----
+        //
+        // 造出"最坏情况"：9 个框、每框已经塞满 40 条 OK + 40 条 NG，
+        // 然后连续送 300 次观察进来（一半是见过的画面、一半是全新画面）。
+        // 要验证三件事：样本库不膨胀、不抛异常、每次观察的耗时在可接受范围内。
+        var stressOptions = learnOptions.Clone();
+        stressOptions.MaxPerClass = 40;
+
+        var stressPool = new List<RoiSample>();
+        for (int roi = 1; roi <= 9; roi++)
+        {
+            for (int i = 0; i < 40; i++)
+            {
+                stressPool.Add(new RoiSample
+                {
+                    RoiIndex = roi, RoiName = $"压测框{roi}", IsOk = true,
+                    Feature = FakeFeature(10_000 + roi * 100 + i), Source = SampleSource.Auto,
+                });
+                stressPool.Add(new RoiSample
+                {
+                    RoiIndex = roi, RoiName = $"压测框{roi}", IsOk = false,
+                    Feature = FakeFeature(20_000 + roi * 100 + i), Source = SampleSource.Auto,
+                });
+            }
+        }
+
+        int stressCeiling = 9 * 80;                 // 9 个框 × (40 OK + 40 NG)
+        var stressWatch = System.Diagnostics.Stopwatch.StartNew();
+        var stressRandom = new Random(20240913);
+        int stressAdded = 0;
+
+        for (int i = 0; i < 300; i++)
+        {
+            int roi = 1 + stressRandom.Next(9);
+
+            // 一半复用已有画面（会走"强化"），一半是全新的（会触发"淘汰 + 新增"）
+            float[] feature = i % 2 == 0
+                ? stressPool.First(s => s.RoiIndex == roi && s.IsOk).Feature
+                : FakeFeature(50_000 + i);
+
+            var outcome = SelfLearningEngine.Apply(stressPool,
+                Obs(feature, true, 0.99, roi: roi), stressOptions);
+
+            if (outcome.Decision == SelfLearningDecision.Added) stressAdded++;
+        }
+
+        stressWatch.Stop();
+        double stressPerCall = stressWatch.Elapsed.TotalMilliseconds / 300.0;
+
+        Check("AI-10 压力：9 个框塞满 80 条样本后连收 300 次观察 —— 样本库不膨胀、不抛异常、单次耗时在 2ms 以内",
+            stressPool.Count <= stressCeiling
+            && stressAdded > 0
+            && stressPerCall < 2.0,
+            $"样本 {stressPool.Count} 条（上限 {stressCeiling}）· 新增 {stressAdded} 次 · " +
+            $"300 次观察共 {stressWatch.Elapsed.TotalMilliseconds:F0}ms，平均 {stressPerCall:F2}ms/次");
+
+        // 人工教的样本在最坏情况下也必须活着（压测池里全是自学样本，这里补一条人工的再压一轮）
+        var keepManual = new List<RoiSample>
+        {
+            new() { RoiIndex = 1, RoiName = "人工锚点", IsOk = true,
+                    Feature = FakeFeature(99_001), Source = SampleSource.Manual },
+        };
+        for (int i = 0; i < 120; i++)
+        {
+            SelfLearningEngine.Apply(keepManual, Obs(FakeFeature(99_100 + i), true, 0.99), stressOptions);
+        }
+
+        Check("AI-10b 压力下的人工样本保护：连收 120 条自学样本后，那条人工样本仍然在",
+            keepManual.Count <= stressOptions.MaxPerClass
+            && keepManual.Any(s => s.Source == SampleSource.Manual),
+            $"最终 {keepManual.Count} 条，人工样本还在=" +
+            $"{keepManual.Any(s => s.Source == SampleSource.Manual)}");
 
         // ---- 动作计时：落盘 / 读回 / 快慢判定 / 导出（UI-10）----
         string timingDir = Path.Combine(root, "timings");
@@ -901,7 +998,10 @@ public sealed class SelfTestRunner
 
                 bool gotPackage = firstPull.Contains("\"unchanged\":false")
                                   && firstPull.Contains("自检模板")
-                                  && firstPull.Contains("TimingStandards");
+                                  // 接口统一用 camelCase（工位端按大小写不敏感解析），
+                                  // 所以这里必须查 timingStandards 而不是 PascalCase ——
+                                  // 原来查 PascalCase，是这条用例假失败的原因。
+                                  && firstPull.Contains("timingStandards");
                 bool noRepeat = secondPull.Contains("\"unchanged\":true");
                 bool poolOk = poolJson.Contains("自检模板") && poolJson.Contains("ST-99");
                 bool appliedTracked = statusJson.Contains("\"appliedCount\":1");
