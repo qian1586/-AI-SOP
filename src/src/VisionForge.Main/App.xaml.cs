@@ -181,6 +181,78 @@ public partial class App : Application
         _viewModel = new MainViewModel(algorithms, recipes, history, plc, alarm, _logger, events, Settings);
 
         var window = new MainWindow { DataContext = _viewModel };
+
+        // ---- 界面冒烟自检：真把主窗口开一次、布局一遍、再关掉 ----
+        //
+        // 用法：VisionForge.Main.exe --smoketest
+        // 退出码：0 = 界面正常打开，2 = 失败（报告在 data\smoketest\report.txt）
+        //
+        // 为什么需要它：XAML 里资源键写错、转换器找不到、样式目标类型不对，
+        // 静态扫描全都看不出来 —— 只有真正构造并布局一次窗口才会炸，
+        // 而现场看到的只是"打不开"三个字，没法定位。
+        // 有了它，每次重建都能先把这句"打不开"变成一个说清楚位置的错误。
+        if (e.Args.Any(a => string.Equals(a, "--smoketest", StringComparison.OrdinalIgnoreCase)))
+        {
+            string smokeReport = Path.Combine(baseDir, "data", "smoketest", "report.txt");
+
+            // 让消息队列空转一小会儿：绑定、数据模板、转换器都是在这段时间里真正求值的，
+            // 只构造不跑消息，会漏掉一批"只有渲染阶段才暴露"的问题。
+            static void PumpMessages(System.Windows.Threading.Dispatcher dispatcher)
+            {
+                var frame = new System.Windows.Threading.DispatcherFrame();
+                dispatcher.BeginInvoke(
+                    System.Windows.Threading.DispatcherPriority.Background,
+                    new Action(() => frame.Continue = false));
+                System.Windows.Threading.Dispatcher.PushFrame(frame);
+            }
+
+            int smokeExit;
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(smokeReport)!);
+
+                window.Show();
+                window.UpdateLayout();
+
+                var settleUntil = DateTime.Now.AddMilliseconds(500);
+                while (DateTime.Now < settleUntil)
+                {
+                    PumpMessages(window.Dispatcher);
+                    System.Threading.Thread.Sleep(25);
+                }
+
+                window.Close();
+
+                File.WriteAllText(smokeReport,
+                    "界面冒烟自检：通过" + Environment.NewLine +
+                    $"时间：{DateTime.Now:yyyy-MM-dd HH:mm:ss}" + Environment.NewLine +
+                    "主窗口已真实打开、完成一次布局与绑定求值，没有抛异常。" + Environment.NewLine +
+                    "（说明 XAML 能解析、资源键都在、转换器都能找到、绑定不会把界面打崩）" + Environment.NewLine,
+                    new System.Text.UTF8Encoding(true));
+
+                Console.WriteLine("[冒烟自检] 通过：界面能正常打开（XAML / 资源 / 转换器 / 绑定都过了一遍）");
+                smokeExit = 0;
+            }
+            catch (Exception ex)
+            {
+                try
+                {
+                    File.WriteAllText(smokeReport,
+                        "界面冒烟自检：失败" + Environment.NewLine +
+                        $"时间：{DateTime.Now:yyyy-MM-dd HH:mm:ss}" + Environment.NewLine +
+                        ex, new System.Text.UTF8Encoding(true));
+                }
+                catch { /* 连报告都写不了就只能靠控制台了 */ }
+
+                Console.WriteLine("[冒烟自检] 失败：" + ex.Message);
+                Console.WriteLine(ex);
+                smokeExit = 2;
+            }
+
+            Environment.Exit(smokeExit);
+            return;
+        }
+
         // 注意这里不要写 async：方法体内没有 await，
         // 编译器会报 CS1998（"此异步方法缺少 await"）——本项目的目标是 0 警告。
         window.Closing += (_, _) =>

@@ -265,6 +265,42 @@ if ($SkipSelfTest) {
     }
 }
 
+# ---- 5.5 界面冒烟自检 ----
+# 自检管的是"逻辑对不对"，管不了"界面能不能起来"。
+# XAML 里资源键写错、转换器找不到、样式目标类型不对 —— 这些静态扫描都看不出来，
+# 只有真正构造并布局一次窗口才会炸，而现场看到的就是那句"打不开"。
+# 所以这里真开一次主窗口（约半秒）、布局一遍、再关掉：能过就说明界面是好的。
+$smokeExit = -1
+if ($SkipSelfTest) {
+    SayWarn "按参数跳过界面冒烟自检。"
+} else {
+    Head "5.5/5 界面冒烟自检（真开一次主窗口）"
+
+    $smokeReport = Join-Path $AppDir 'data\smoketest\report.txt'
+    Log ("执行：" + $appExe + " --smoketest")
+    $sm = Start-Process -FilePath $appExe -ArgumentList '--smoketest' -Wait -PassThru -NoNewWindow
+    $smokeExit = $sm.ExitCode
+    Log ("冒烟自检退出码：" + $smokeExit)
+
+    if ($smokeExit -eq 0) {
+        SayOk "界面冒烟自检通过：主窗口能正常打开（XAML / 资源 / 转换器 / 绑定都过了一遍）。"
+    } else {
+        SayErr "界面打不开（退出码 $smokeExit）！详情见：" + $smokeReport
+        if (Test-Path $smokeReport) {
+            Log "---------- 冒烟自检报告 ----------"
+            foreach ($line in Get-Content $smokeReport -Encoding UTF8) {
+                Write-Host ("    " + $line)
+                Add-Content -Path $LogFile -Value ("    " + $line) -Encoding UTF8
+            }
+            Log "----------------------------------"
+        }
+
+        # 界面都起不来就别再启动了 —— 免得现场只看到一个闪一下就没的窗口
+        SayErr "本次不启动程序，请先把上面这份报告发给开发人员。"
+        exit 1
+    }
+}
+
 if ($NoLaunch) { SayWarn "按参数要求不启动程序。"; exit 0 }
 
 Head "启动并观察初始化"
@@ -285,6 +321,14 @@ $proc = @(Get-Process -Name 'VisionForge.Main' -ErrorAction SilentlyContinue)
 $lf = Get-LatestLog
 
 Head "结果"
+if ($smokeExit -eq 0) {
+    SayOk "界面冒烟自检：主窗口能正常打开"
+} elseif ($smokeExit -gt 0) {
+    SayErr "界面冒烟自检：打不开（见上面的报告）"
+} else {
+    SayWarn "界面冒烟自检：未执行"
+}
+
 if ($selfTestExit -eq 0) {
     SayOk "监测逻辑自检：全部通过"
 } elseif ($selfTestExit -gt 0) {
