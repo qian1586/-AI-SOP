@@ -46,10 +46,11 @@
                 底部历史表格的高度。原来是 210 —— 它占的是"每一页都要让出来"的高度，
                 而上面主画面那一行是 *（剩下的全给它）。现场反馈：
                 "底部画圈的地方高度缩小，上面显示视频的地方已经很小了，需要扩大"。
-                所以这里压到 150：表格还能显示表头 + 三行记录，
-                省下来的 60px 全给上面的实时画面。
+                先压到 150，现场反馈"画圈的高度再压缩"，于是再压到 118：
+                表头 + 三行记录照样放得下（行高同时从 32 收到 24），
+                省下来的高度全给上面的实时画面。
             -->
-            <RowDefinition Height="150"/>
+            <RowDefinition Height="118"/>
         </Grid.RowDefinitions>
 
         <!-- ============================ 顶栏 ============================ -->
@@ -2407,9 +2408,13 @@
         </Border>
 
         <!-- ============================ 底部历史表格 ============================ -->
-        <Border Grid.Row="4" Style="{StaticResource CardBorder}" Margin="12,8,12,12">
+        <Border x:Name="HistoryStrip" Grid.Row="4" Style="{StaticResource CardBorder}" Margin="12,6,12,8">
             <DockPanel LastChildFill="True">
-                <Grid DockPanel.Dock="Top" Margin="14,10,14,8">
+                <!--
+                    标题行也压过：原来 14,10,14,8 的内边距 + 14px 标题，
+                    在一张总共只有一百多像素高的条里占了将近三分之一。
+                -->
+                <Grid DockPanel.Dock="Top" Margin="12,6,12,4">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>
@@ -2418,20 +2423,21 @@
                     <StackPanel Grid.Column="0" Orientation="Horizontal">
                         <TextBlock Text="历史数据"
                                    Foreground="{StaticResource TextPrimary}"
-                                   FontSize="14" FontWeight="SemiBold"/>
+                                   FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"/>
                         <TextBlock Text="{Binding HistoryRecords.Count, StringFormat=（{0} 条）}"
                                    Foreground="{StaticResource TextSecond}"
-                                   FontSize="12" Margin="8,2,0,0" VerticalAlignment="Center"/>
+                                   FontSize="10" Margin="6,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                     <StackPanel Grid.Column="2" Orientation="Horizontal">
                         <Button Style="{StaticResource ToolButton}" Content="导出 CSV"
-                                Command="{Binding ExportHistoryCommand}"/>
+                                Command="{Binding ExportHistoryCommand}"
+                                Padding="8,2" FontSize="10"/>
                     </StackPanel>
                 </Grid>
 
                 <DataGrid Style="{StaticResource HistoryDataGrid}"
                           ItemsSource="{Binding HistoryRecords}"
-                          Margin="6,0,6,8">
+                          Margin="6,0,6,6">
                     <DataGrid.Columns>
                         <DataGridTextColumn Header="时间" Width="170"
                                             Binding="{Binding Timestamp, StringFormat=yyyy-MM-dd HH:mm:ss}"/>

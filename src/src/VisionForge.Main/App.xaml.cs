@@ -259,6 +259,11 @@ public partial class App : Application
                     {
                         layoutNote += $"｜区域学习卡高度：{learnCard.ActualHeight:F0}px";
                     }
+
+                    if (window.FindName("HistoryStrip") is System.Windows.FrameworkElement historyStrip)
+                    {
+                        layoutNote += $"｜底部历史条高度：{historyStrip.ActualHeight:F0}px";
+                    }
                 }
                 catch (Exception layoutEx)
                 {

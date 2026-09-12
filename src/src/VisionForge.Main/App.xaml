@@ -438,9 +438,15 @@
                 <Setter Property="RowBackground"        Value="Transparent"/>
                 <Setter Property="AlternatingRowBackground" Value="{StaticResource StateRowAlt}"/>
                 <Setter Property="HeadersVisibility"    Value="Column"/>
-                <Setter Property="RowHeight"            Value="32"/>
-                <Setter Property="ColumnHeaderHeight"   Value="34"/>
-                <Setter Property="FontSize"             Value="12"/>
+                <!--
+                    行高与表头高都压过（32/34 → 24/22）。
+                    这张表是"底部留痕条"，占的高度是从相机画面上让出来的，
+                    而现场看它只是扫一眼有没有记录、最近几条是什么。
+                    24px 行高 + 11px 字仍然清晰可读，但整条能省下约 10px。
+                -->
+                <Setter Property="RowHeight"            Value="24"/>
+                <Setter Property="ColumnHeaderHeight"   Value="22"/>
+                <Setter Property="FontSize"             Value="11"/>
                 <Setter Property="AutoGenerateColumns"  Value="False"/>
                 <Setter Property="IsReadOnly"           Value="True"/>
                 <Setter Property="CanUserAddRows"       Value="False"/>
@@ -452,8 +458,8 @@
                 <Setter Property="Background"    Value="{StaticResource BgPanelDeep}"/>
                 <Setter Property="Foreground"    Value="{StaticResource TextSecond}"/>
                 <Setter Property="FontWeight"    Value="SemiBold"/>
-                <Setter Property="FontSize"      Value="12"/>
-                <Setter Property="Padding"       Value="10,6"/>
+                <Setter Property="FontSize"      Value="11"/>
+                <Setter Property="Padding"       Value="10,2"/>
                 <Setter Property="BorderBrush"   Value="{StaticResource BorderSoft}"/>
                 <Setter Property="BorderThickness" Value="0,0,0,1"/>
                 <Setter Property="HorizontalContentAlignment" Value="Left"/>
