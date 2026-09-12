@@ -1070,10 +1070,16 @@
                 </Grid.RowDefinitions>
 
                 <!-- 右上：过程层监测（手部动作合规，方案 v9） -->
-                <Border Grid.Row="0" Style="{StaticResource CardBorder}" Padding="14">
+                <Border x:Name="ProcessMonitorCard" Grid.Row="0" Style="{StaticResource CardBorder}" Padding="14">
                     <!-- 套一层滚动：卡片内容多，窗口矮的时候也不会把标题和按钮裁掉 -->
                     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                    <DockPanel LastChildFill="True">
+                    <!--
+                        MinHeight 绑到滚动视口高度：内容比卡片矮的时候，DockPanel 会被拉到和卡片一样高，
+                        最后一个子元素（工位列表）自动吃掉多余高度 —— 也就是"把卡片内部填满"；
+                        内容比卡片高的时候，仍然老实出现滚动条，不会丢东西。
+                    -->
+                    <DockPanel LastChildFill="True"
+                               MinHeight="{Binding ViewportHeight, RelativeSource={RelativeSource AncestorType=ScrollViewer}}">
                         <!--
                             标题和按钮分两行 + 按钮用 WrapPanel：
                             原来标题和两个按钮挤在一行，右边栏一窄就把按钮挤没了
@@ -1286,11 +1292,32 @@
                 </Border>
 
                 <!-- 右上：当前工序监测面板（操作员首页核心） -->
-                <Border Grid.Row="2" Style="{StaticResource CardBorder}" Padding="14">
+                <Border x:Name="CurrentStepCard" Grid.Row="2" Style="{StaticResource CardBorder}" Padding="14">
                     <!-- 同上：内容多，套滚动避免被裁 -->
                     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                    <StackPanel>
-                        <Grid Margin="0,0,0,8">
+                    <!--
+                        原来是 StackPanel：内容从上往下堆，卡片再高也在底部留一大块空白
+                        （现场反馈"要合理填满卡片内部"）。
+                        现在改成 Grid + 行分配：**大号作业指引那一行给 * **，
+                        多出来的高度全部被它吃掉 —— 卡片被填满，而且"当前该做什么"这块变大，
+                        本来就该是这张卡的主角。
+                        MinHeight 绑滚动视口高度：内容比卡片矮时撑满，比卡片高时照旧滚动。
+                    -->
+                    <Grid MinHeight="{Binding ViewportHeight, RelativeSource={RelativeSource AncestorType=ScrollViewer}}">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>   <!-- 标题 -->
+                            <RowDefinition Height="*"/>      <!-- 大号作业指引（吃掉多余高度） -->
+                            <RowDefinition Height="Auto"/>   <!-- 实时统计 -->
+                            <RowDefinition Height="Auto"/>   <!-- 本次判定 -->
+                            <RowDefinition Height="Auto"/>   <!-- 模拟标题 -->
+                            <RowDefinition Height="Auto"/>   <!-- 模拟按钮 -->
+                            <RowDefinition Height="Auto"/>   <!-- 上一动作 -->
+                            <RowDefinition Height="Auto"/>   <!-- 模拟进度 -->
+                            <RowDefinition Height="Auto"/>   <!-- 过程数据标题 -->
+                            <RowDefinition Height="Auto"/>   <!-- 过程数据列表 -->
+                        </Grid.RowDefinitions>
+
+                        <Grid Grid.Row="0" Margin="0,0,0,8">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="*"/>
@@ -1306,13 +1333,14 @@
                         </Grid>
 
                         <!-- 大号作业指引：现场离屏幕两米也要看得清 -->
-                        <Border Background="{StaticResource BgPanelDeep}"
+                        <Border Grid.Row="1" Background="{StaticResource BgPanelDeep}"
+                                MinHeight="56"
                                 CornerRadius="6" Padding="10,8" BorderThickness="1"
                                 BorderBrush="{Binding StepStateKey, Converter={StaticResource StateKeyToBrush}}">
                             <DockPanel>
                                 <Border DockPanel.Dock="Left" Width="5" CornerRadius="3" Margin="0,0,10,0"
                                         Background="{Binding StepStateKey, Converter={StaticResource StateKeyToBrush}}"/>
-                                <StackPanel>
+                                <StackPanel VerticalAlignment="Center">
                                     <TextBlock Text="{Binding StepName}"
                                                Foreground="{StaticResource TextPrimary}"
                                                FontSize="16" FontWeight="Bold" TextWrapping="Wrap"/>
@@ -1326,7 +1354,7 @@
                         <!-- 动作计时挪到首页最下面那一行（右侧栏太挤，挤过一次按钮了） -->
 
                         <!-- 实时统计 -->
-                        <UniformGrid Columns="4" Margin="0,8,0,0">
+                        <UniformGrid Grid.Row="2" Columns="4" Margin="0,8,0,0">
                             <StackPanel>
                                 <TextBlock Text="OK" Foreground="{StaticResource TextSecond}"
                                            FontSize="10" HorizontalAlignment="Center"/>
@@ -1354,7 +1382,7 @@
                         </UniformGrid>
 
                         <!-- 本次判定 -->
-                        <Border Background="{StaticResource BgPanel}" CornerRadius="4" Padding="8,6" Margin="0,8,0,0"
+                        <Border Grid.Row="3" Background="{StaticResource BgPanel}" CornerRadius="4" Padding="8,6" Margin="0,8,0,0"
                                 BorderThickness="1"
                                 BorderBrush="{Binding VerdictStateKey, Converter={StaticResource StateKeyToBrush}}">
                             <StackPanel>
@@ -1373,9 +1401,9 @@
                         </Border>
 
                         <!-- 测试逻辑：模拟人工动作（没有产线也能验证监测逻辑） -->
-                        <TextBlock Text="模拟人工动作（测试用）" Foreground="{StaticResource TextPrimary}"
+                        <TextBlock Grid.Row="4" Text="模拟人工动作（测试用）" Foreground="{StaticResource TextPrimary}"
                                    FontSize="11" FontWeight="SemiBold" Margin="0,8,0,4"/>
-                        <WrapPanel>
+                        <WrapPanel Grid.Row="5">
                             <Button Style="{StaticResource PrimaryButton}" Content="规范动作"
                                     Command="{Binding SimulateCorrectStepCommand}"
                                     FontSize="11" Padding="10,4" Margin="0,0,5,5"/>
@@ -1389,15 +1417,15 @@
                                     Command="{Binding SimulateRepeatCommand}"
                                     FontSize="11" Padding="10,4" Margin="0,0,5,5"/>
                         </WrapPanel>
-                        <TextBlock Text="{Binding LastActionText}" Foreground="{StaticResource TextMuted}"
+                        <TextBlock Grid.Row="6" Text="{Binding LastActionText}" Foreground="{StaticResource TextMuted}"
                                    FontSize="10" TextWrapping="Wrap"/>
-                        <TextBlock Text="{Binding SimulatorProgressText}" Foreground="{StaticResource TextMuted}"
+                        <TextBlock Grid.Row="7" Text="{Binding SimulatorProgressText}" Foreground="{StaticResource TextMuted}"
                                    FontSize="10" Margin="0,2,0,0"/>
 
                         <!-- 过程数据：ROI 占用率、违规次数等 -->
-                        <TextBlock Text="过程数据" Foreground="{StaticResource TextPrimary}"
+                        <TextBlock Grid.Row="8" Text="过程数据" Foreground="{StaticResource TextPrimary}"
                                    FontSize="11" FontWeight="SemiBold" Margin="0,8,0,4"/>
-                        <ScrollViewer MaxHeight="40" VerticalScrollBarVisibility="Auto">
+                        <ScrollViewer Grid.Row="9" MaxHeight="40" VerticalScrollBarVisibility="Auto">
                             <ItemsControl ItemsSource="{Binding MeasurementLines}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
@@ -1408,7 +1436,7 @@
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
                         </ScrollViewer>
-                    </StackPanel>
+                    </Grid>
                     </ScrollViewer>
                 </Border>
 
@@ -1426,7 +1454,13 @@
                     ToolTip="计时基准优先取「上一次做同一动作」的用时；没有上次才用「⚙ 时间设置」里的标准工时。慢 30% 以上标红。">
                 <Grid>
                     <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
+                        <!--
+                            第一行给 *：这一栏的内容（9 个状态项 + 计时卡）合计只有约 390px，
+                            而卡片本身有 620px 高，底部会空出两百多像素（现场反馈"要填满卡片内部"）。
+                            把第一行改成 *，9 个状态项就按等分把上面的空间铺满，
+                            计时卡仍然贴在卡片底部。
+                        -->
+                        <RowDefinition Height="*"/>
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
@@ -1442,7 +1476,7 @@
                         横向 StackPanel 不会限制子元素宽度，长文本（比如工单号）会直接撑破卡片；
                         DockPanel 的最后一个子元素会占满剩余宽度，配合 TextTrimming 才会老实出省略号。
                     -->
-                    <StackPanel Grid.Row="0">
+                    <UniformGrid Grid.Row="0" Columns="1">
                         <DockPanel Margin="0,0,6,4">
                             <TextBlock DockPanel.Dock="Left" Text="工单号" Foreground="{StaticResource TextSecond}"
                                        FontSize="10" VerticalAlignment="Center" Margin="0,0,6,0"/>
@@ -1507,7 +1541,7 @@
                                        FontFamily="{StaticResource MonoFont}" FontSize="13" FontWeight="Bold"
                                        VerticalAlignment="Center"/>
                         </DockPanel>
-                    </StackPanel>
+                    </UniformGrid>
 
                     <!--
                         第二行：动作计时（本步已用时 / 基准 / 上次 / 快慢 / 件号 + 两个窗口入口）。

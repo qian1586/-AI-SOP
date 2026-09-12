@@ -235,14 +235,23 @@ public partial class App : Application
                         card.ActualHeight > 0)
                     {
                         double available = card.ActualHeight - card.Padding.Top - card.Padding.Bottom;
-                        double needed = inner.DesiredSize.Height;
-                        double overflow = needed - available;
-                        string head = overflow > 1
-                            ? $"⚠ 超出 {overflow:F0}px（会被裁掉）"
-                            : $"✔ 放得下（还余 {(-overflow):F0}px）";
+                        double natural = inner.DesiredSize.Height;   // 内容"想要"多高
+                        double arranged = inner.ActualHeight;        // 实际排布多高（被拉伸后）
+
+                        // 两件事要分开看：
+                        //   natural > available → 内容装不下（会被裁或滚动）
+                        //   arranged < available → 内容没铺满，底部会空一块
+                        string head;
+                        if (natural > available + 1)
+                            head = $"⚠ 装不下，超出 {natural - available:F0}px";
+                        else if (arranged < available - 2)
+                            head = $"⚠ 底部还空着 {available - arranged:F0}px";
+                        else
+                            head = "✔ 已铺满";
 
                         layoutNote =
-                            $"现场状态栏：容器可用高 {available:F0}px，内容需要 {needed:F0}px —— {head}" +
+                            $"现场状态栏：容器可用 {available:F0}px，内容自然高 {natural:F0}px，" +
+                            $"实际占满 {arranged:F0}px —— {head}" +
                             Environment.NewLine +
                             $"屏幕 {SystemParameters.PrimaryScreenWidth:F0}×{SystemParameters.PrimaryScreenHeight:F0}，" +
                             $"窗口 {window.ActualWidth:F0}×{window.ActualHeight:F0}";
@@ -269,6 +278,29 @@ public partial class App : Application
                     if (window.FindName("CameraToolbar") is System.Windows.FrameworkElement cameraToolbar)
                     {
                         layoutNote += $"｜画面浮层工具条高度：{cameraToolbar.ActualHeight:F0}px";
+                    }
+
+                    // 右列两张卡：量"给的高度 vs 内容要的高度"，判断是空着还是装不下
+                    foreach (var (name, label) in new[]
+                             {
+                                 ("ProcessMonitorCard", "过程监测卡"),
+                                 ("CurrentStepCard", "当前工序卡"),
+                             })
+                    {
+                        if (window.FindName(name) is System.Windows.Controls.Border c &&
+                            c.Child is System.Windows.FrameworkElement kid && c.ActualHeight > 0)
+                        {
+                            double avail = c.ActualHeight - c.Padding.Top - c.Padding.Bottom;
+                            double need = kid.DesiredSize.Height;
+                            double diff = need - avail;
+                            layoutNote += Environment.NewLine +
+                                $"{label}：可用 {avail:F0}px，内容需要 {need:F0}px —— " +
+                                (diff > 1
+                                    ? $"⚠ 装不下，超出 {diff:F0}px（会滚动/被裁）"
+                                    : diff < -2
+                                        ? $"⚠ 底部空着 {(-diff):F0}px"
+                                        : "✔ 已铺满");
+                        }
                     }
                 }
                 catch (Exception layoutEx)
