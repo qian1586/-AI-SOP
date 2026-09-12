@@ -343,7 +343,7 @@ def main() -> int:
             {"ref": f"refs/heads/{BRANCH}", "sha": commit["sha"]})
     print(f" {BRANCH} 分支已更新")
 
-    print("\n 上传完成 ✔")
+    print("\n 上传完成 OK")
     print(f" 打开看看：https://github.com/{OWNER}/{REPO}")
     return 0
 
