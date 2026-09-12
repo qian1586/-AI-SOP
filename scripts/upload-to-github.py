@@ -40,6 +40,19 @@ import sys
 import urllib.error
 import urllib.request
 
+# ---------------------------------------------------------------- 控制台编码
+#
+# Windows 的 cmd 默认是 GBK（936），像 "✔" 这种符号它编不出来 ——
+# 不处理的话，明明文件已经全部传完了，最后一行打印却抛 UnicodeEncodeError，
+# 现场看到的就是"一片红字"，会以为上传失败。
+# 这里把标准输出改成"编不出来就替换成 ?"，绝不让打印把结果搞砸。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")
+    except Exception:
+        pass
+
+
 # ---------------------------------------------------------------- 常量
 
 OWNER = "qian1586"
