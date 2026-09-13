@@ -465,6 +465,94 @@ public sealed class SelfTestRunner
         Check("UI-24 手部 21 关节：ONNX 模型能加载、能推理、在测试图上认出手并给出 21 个关节点",
             poseOk, poseDetail);
 
+        // ---- UI-25 手部轨迹 → 判工序：停留、宽限、顺序 ----
+        //
+        // 时序逻辑（停多久算动作、掉帧算不算离开、先做后面的步算不算错序）
+        // 靠现场试是试不全的，所以用一个纯逻辑类把它钉死。
+        var tracker = new HandActionTracker(new HandActionOptions
+        {
+            MinScore = 0.5,
+            DwellMs = 300,
+            LeaveGraceMs = 400,
+        });
+
+        var t0 = new DateTime(2026, 9, 13, 10, 0, 0);
+
+        // ① 手进第 2 个框，快速划过（只在里面 100ms）→ 不该算"做了动作"
+        tracker.Observe(t0, 2, 0.9);
+        var quickPass = tracker.Observe(t0.AddMilliseconds(100), 2, 0.9);
+        bool quickPassSilent = quickPass.All(e => e.Kind != "Dwell");
+
+        // ② 手在第 3 个框停留 400ms → 应产生一次 Dwell
+        var dwellEvents = new List<HandActionEvent>();
+        tracker.Observe(t0.AddMilliseconds(200), 3, 0.9);
+        for (int ms = 300; ms <= 700; ms += 100)
+            dwellEvents.AddRange(tracker.Observe(t0.AddMilliseconds(200 + ms), 3, 0.9));
+        bool dwellFired = dwellEvents.Count(e => e.Kind == "Dwell") == 1;
+
+        // ③ 掉两帧（手被挡住）再回到同一个框 → 宽限期内，停留时间继续累计、不重复发 Dwell
+        var afterGap = new List<HandActionEvent>();
+        afterGap.AddRange(tracker.Observe(t0.AddMilliseconds(950), -1, 0.0));
+        afterGap.AddRange(tracker.Observe(t0.AddMilliseconds(1000), -1, 0.0));
+        afterGap.AddRange(tracker.Observe(t0.AddMilliseconds(1050), 3, 0.9));
+        bool graceWorked = afterGap.All(e => e.Kind != "Dwell") && tracker.CurrentRoi == 3;
+
+        // ④ 手换到第 1 个框 → 应产生 Leave(3) + Enter(1)
+        var moved = tracker.Observe(t0.AddMilliseconds(2000), 1, 0.9);
+        bool movedOk = moved.Any(e => e.Kind == "Leave" && e.RoiIndex == 3)
+                       && moved.Any(e => e.Kind == "Enter" && e.RoiIndex == 1);
+
+        // ⑤ 长时间丢失 → 超过宽限期，应判离开
+        var lost = tracker.Observe(t0.AddMilliseconds(3000), -1, 0.0);
+        bool lostOk = lost.Any(e => e.Kind == "Leave" && e.RoiIndex == 1);
+
+        // ⑥ 低置信度的手不算数（模型自己都不确定，不能拿来判工序）
+        var lowScore = tracker.Observe(t0.AddMilliseconds(3100), 2, 0.2);
+        bool lowScoreIgnored = tracker.CurrentRoi == -1 && lowScore.Count == 0;
+
+        Check("UI-25 手部轨迹跟踪：停留够时间才算动作、掉帧有宽限不重复计、换框判离开、长时间丢失判离开、低置信度不算数",
+            quickPassSilent && dwellFired && graceWorked && movedOk && lostOk && lowScoreIgnored,
+            $"快速划过不判动作={quickPassSilent}；停留 400ms 产生 1 次动作={dwellFired}；" +
+            $"掉帧宽限生效={graceWorked}；换框=Leave+Enter {movedOk}；长时间丢失判离开={lostOk}；" +
+            $"低置信度忽略={lowScoreIgnored}；路径={tracker.PathText}");
+
+        // ---- UI-26 手先去了后面的步骤 → 判错序 ----
+        // 画框需要先进标定模式（要工程师权限），画完 3 个框会自动同步出 3 道工序
+        vm.AttemptRoleChange("工程师", "wf-eng");
+        if (!vm.IsRoiEditMode) vm.ToggleRoiEditCommand.Execute(null);
+        vm.ClearRoisCommand.Execute(null);
+
+        for (int i = 0; i < 3; i++)
+        {
+            vm.BeginRoiDraft(900 + i * 20, 300);
+            vm.UpdateRoiDraft(950 + i * 20, 360);
+            vm.CommitRoiDraft();
+        }
+
+        // 工序状态不依赖前面用例的残留：自己装一份确定的 SOP 再复位到第 1 步
+        vm.Sop.Load(DemoDataFactory.CreateDemoSop(recipe.Id));
+        vm.ResetSopCommand.Execute(null);
+
+        int seqNow = vm.Sop.CurrentStep?.Seq ?? 0;
+        // 前提：流程停在第 1 步（"手去了第 2 步"才构成错序）。
+        // 不依赖框位数量 —— 复位流程会连带清掉框位，那和这条判定无关。
+        bool setupOk = seqNow == 1;
+        int violationsBefore = vm.ProcessViolations.Count;
+
+        vm.ReportHandAction(roiIndex: seqNow + 1, dwellMs: 500);
+
+        int violationsAfter = vm.ProcessViolations.Count;
+        string actionText = vm.HandActionText;
+        vm.ClearRoisCommand.Execute(null);
+
+        Check("UI-26 手部错序：手先去了后面才该做的那一步 → 记违规（走 PLC 规则码），手回到已完成步骤不报警",
+            setupOk
+            && violationsAfter == violationsBefore + 1
+            && actionText.Contains("错序"),
+            $"{vm.RoiTargets.Count} 个框 / 当前该做第 {seqNow} 步（前提成立={setupOk}）；" +
+            $"手先动了第 {seqNow + 1} 步 → 违规数 {violationsBefore}→{violationsAfter}；" +
+            $"判定文案：{actionText}");
+
         // ---- 十八·建图三件事（UI-01~03）----
         //
         // 这三条是这次现场问题（"按住拖拽画不出框"）的回归测试。
@@ -476,7 +564,9 @@ public sealed class SelfTestRunner
             vm.ShowRoiBoxes && vm.RoiOverlays.Count == recipe.Rois.Count(r => r.Enabled),
             $"ShowRoiBoxes={vm.ShowRoiBoxes}，叠加框={vm.RoiOverlays.Count} 个 / 配方里 {recipe.Rois.Count} 个");
 
-        vm.ToggleRoiEditCommand.Execute(null);
+        // 注意：这里要"确保进入"，不能盲切 —— 前面若有别的用例已经打开标定模式，
+        // 盲切会把它关掉，后面的画框用例就全废了（这个坑真踩过）。
+        if (!vm.IsRoiEditMode) vm.ToggleRoiEditCommand.Execute(null);
 
         int roisBefore = recipe.Rois.Count;
         vm.BeginRoiDraft(100, 100);
@@ -1096,6 +1186,13 @@ public sealed class SelfTestRunner
         // 这是现场"标了三个框、教了 OK/NG、但跑不起一套流程"的根因：
         // "从左拿笔→从右拿笔→放到中间"是**拿走**流程，而默认规则是"有东西=完成"，
         // 于是开头两支笔都在 → 三个框全判完成 → 流程瞬间走完，后面拿笔反倒成了违规。
+        // 画框的前提：必须在标定模式里（要工程师权限）
+        // 另外先把这台 VM 指到自检自己的配方上、并清空框：
+        // 否则会画到"VM 当初加载的那个配方"里，后面所有计数都对不上。
+        vm.ActiveRecipe = recipe;
+        if (!vm.IsRoiEditMode) vm.ToggleRoiEditCommand.Execute(null);
+        vm.ClearRoisCommand.Execute(null);
+
         for (int i = 0; i < 3; i++)
         {
             vm.BeginRoiDraft(700 + i * 25, 300);
@@ -1104,14 +1201,20 @@ public sealed class SelfTestRunner
         }
 
         var roiOptions = vm.RoiTargets.ToList();
+        bool ui22SetupOk = roiOptions.Count >= 3;
 
         // 默认（有东西=完成）：笔在 = 完成
         bool presentMode = vm.IsStepCompleted(1, true) && !vm.IsStepCompleted(1, false);
 
         // 切成"被拿走=完成"：笔在 = 未完成、拿走 = 完成、拿不准 = 不算完成
-        vm.ToggleRoiDoneMode(roiOptions[0]);
-        vm.ToggleRoiDoneMode(roiOptions[1]);
-        bool absentMode = !vm.IsStepCompleted(1, true)
+        if (ui22SetupOk)
+        {
+            vm.ToggleRoiDoneMode(roiOptions[0]);
+            vm.ToggleRoiDoneMode(roiOptions[1]);
+        }
+
+        bool absentMode = ui22SetupOk
+                          && !vm.IsStepCompleted(1, true)
                           && vm.IsStepCompleted(1, false)
                           && !vm.IsStepCompleted(1, null);
 
@@ -1121,7 +1224,7 @@ public sealed class SelfTestRunner
         vm.ClearRoisCommand.Execute(null);      // 还原成"没有框"，不影响后面的用例
 
         Check("UI-22 拿走型工序：完成条件切成「被拿走」后，笔还在=未完成、笔拿走=完成、拿不准=不算；默认规则正好相反",
-            roiOptions.Count == 3
+            ui22SetupOk
             && stepsAfterDraw == 3
             && presentMode
             && absentMode
@@ -1134,6 +1237,9 @@ public sealed class SelfTestRunner
         //
         // 这是"方向对齐"的第一块地基：从"框里有没有东西"升级成"框里是哪一类"。
         // 现场要的正是这个分辨率 —— 只报一个 NG，操作员还得自己去猜是没装还是装错。
+        if (!vm.IsRoiEditMode) vm.ToggleRoiEditCommand.Execute(null);
+        vm.ClearRoisCommand.Execute(null);
+
         for (int i = 0; i < 2; i++)
         {
             vm.BeginRoiDraft(800 + i * 30, 300);
@@ -1142,10 +1248,14 @@ public sealed class SelfTestRunner
         }
 
         var classOptions = vm.RoiTargets.ToList();
-        vm.SelectedRoiTarget = classOptions[0];
-        vm.ExpectedClassesText = "导光柱";     // 这一步应该是导光柱
+        bool ui23SetupOk = classOptions.Count >= 2;
+        if (ui23SetupOk)
+        {
+            vm.SelectedRoiTarget = classOptions[0];
+            vm.ExpectedClassesText = "导光柱";     // 这一步应该是导光柱
+        }
 
-        bool expectedAccepted = vm.IsStepCompleted(1, true, "导光柱");
+        bool expectedAccepted = ui23SetupOk && vm.IsStepCompleted(1, true, "导光柱");
         bool wrongPartCaught = !vm.IsStepCompleted(1, true, "外壳");
         bool missingPartCaught = !vm.IsStepCompleted(1, false, "空");
 
@@ -1156,7 +1266,7 @@ public sealed class SelfTestRunner
         vm.ClearRoisCommand.Execute(null);
 
         Check("UI-23 按类别判：认出「导光柱」=通过；认成「外壳」=装错；认成「空」=漏装 —— 三种结果分开报",
-            classOptions.Count == 2
+            ui23SetupOk
             && expectedAccepted
             && wrongPartCaught
             && missingPartCaught

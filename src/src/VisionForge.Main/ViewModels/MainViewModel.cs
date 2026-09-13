@@ -730,6 +730,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         // 区域学习跨件也有记忆（每个框最近判成什么），不清就会"上一件是 OK，
         // 这一件一开局就少推一步"。同时把框的颜色收回未判定。
         _roiLastStates.Clear();
+        _handTracker.ResetAll();      // 手部轨迹也是"这一件"的，换件要重新开始
+        HandPathText = "手的动作轨迹：（还没有动作）";
+        HandActionText = "手柄动作判定：—";
         RoiLearnStateKey = "pending";
         RoiLearnResultText = "—";
         RoiLearnConfidence = 0;

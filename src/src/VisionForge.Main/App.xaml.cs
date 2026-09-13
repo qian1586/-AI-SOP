@@ -78,10 +78,9 @@ public partial class App : Application
         if (e.Args.Any(a => string.Equals(a, "--selftest", StringComparison.OrdinalIgnoreCase)))
         {
             int exitCode;
+            string reportPath = Path.Combine(AppContext.BaseDirectory, "data", "selftest", "report.txt");
             try
             {
-                string reportPath = Path.Combine(AppContext.BaseDirectory, "data", "selftest", "report.txt");
-
                 // 必须丢到线程池上跑：OnStartup 就在 UI 线程里，
                 // 而自检里大量"同步等待异步"，在 UI 线程上跑会自己把自己锁死
                 exitCode = Task.Run(() => SelfTest.SelfTestRunner.Run(AppContext.BaseDirectory, reportPath))
@@ -92,6 +91,22 @@ public partial class App : Application
                 File.AppendAllText(
                     Path.Combine(AppContext.BaseDirectory, "data", "selftest-error.txt"),
                     DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " 自检运行异常：" + ex + Environment.NewLine);
+
+                // 自检自己崩了也必须留一份报告。
+                // 教训：某次用例里一个下标越界，整个自检抛出去，报告文件根本没生成 ——
+                // 现场看到的只是"自检没通过"，连是哪一项都不知道。
+                try
+                {
+                    string text = "================ VisionForge 监测逻辑自检报告 ================" + Environment.NewLine +
+                                  $"时间：{DateTime.Now:yyyy-MM-dd HH:mm:ss}" + Environment.NewLine +
+                                  "结论：自检运行中断（有用例抛异常），下面是异常详情。" + Environment.NewLine +
+                                  "    这不是「某项判定不对」，而是自检程序自身出了问题，请把这份文件发给开发人员。" + Environment.NewLine +
+                                  Environment.NewLine + ex;
+
+                    File.WriteAllText(reportPath, text, new System.Text.UTF8Encoding(true));
+                }
+                catch { /* 连报告都写不了就只能靠日志了 */ }
+
                 exitCode = 1;
             }
 

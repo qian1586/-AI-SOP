@@ -172,18 +172,20 @@ public sealed partial class MainViewModel
             OnPropertyChanged(nameof(HasHandBox));
 
             PoseStatusText = $"手部关键点：21 关节 · 置信度 {hand.Score:P0} · {elapsedMs}ms";
-            HandZoneText = "手部位置：" + DescribeHandZone(hand, previewWidth, previewHeight);
+
+            // 手在哪个框 → 交给轨迹跟踪器（它会判停留、顺序，并更新界面上的位置与轨迹）
+            int roiIndex = ResolveHandRoi(hand, previewWidth, previewHeight);
+            TrackHandAction(DateTime.Now, roiIndex, hand.Score);
         }));
     }
 
     /// <summary>
-    /// 手的重心落在哪个框里（归一化坐标判断）。
-    /// 这是"手部轨迹 → 工位判断"的第一步：之后就能用"手进了哪个框"来辅助判工序。
+    /// 手的重心落在第几个框里（归一化坐标判断）。不落在任何框里就返回 -1。
     /// </summary>
-    private string DescribeHandZone(HandPoseResult hand, int previewWidth, int previewHeight)
+    private int ResolveHandRoi(HandPoseResult hand, int previewWidth, int previewHeight)
     {
         var recipe = ActiveRecipe;
-        if (recipe is null || previewWidth <= 0 || previewHeight <= 0) return "—";
+        if (recipe is null || previewWidth <= 0 || previewHeight <= 0) return -1;
 
         var center = hand.Center;
         double nx = center.X / previewWidth;
@@ -193,9 +195,9 @@ public sealed partial class MainViewModel
         for (int i = 0; i < rois.Count; i++)
         {
             if (rois[i].Contains(nx, ny))
-                return $"第 {i + 1} 个框「{rois[i].Name}」";
+                return i + 1;
         }
 
-        return $"框外（{nx:P0}, {ny:P0}）";
+        return -1;
     }
 }

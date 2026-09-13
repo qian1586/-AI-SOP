@@ -594,6 +594,11 @@
                         <StackPanel>
                             <TextBlock Text="{Binding PoseStatusText}" Foreground="#FF00E676" FontSize="10"/>
                             <TextBlock Text="{Binding HandZoneText}" Foreground="{StaticResource TextSecond}" FontSize="10"/>
+                            <TextBlock Text="{Binding HandActionText}" Foreground="{StaticResource StateWarn}" FontSize="10"
+                                       TextWrapping="Wrap" MaxWidth="420"
+                                       Visibility="{Binding HasHandBox, Converter={StaticResource BoolToVisibility}}"/>
+                            <TextBlock Text="{Binding HandPathText}" Foreground="{StaticResource TextMuted}" FontSize="10"
+                                       TextWrapping="Wrap" MaxWidth="420"/>
                         </StackPanel>
                     </Border>
 
