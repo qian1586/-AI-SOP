@@ -411,6 +411,60 @@ public sealed class SelfTestRunner
             $"操作员下按钮不可用={roiLockedForOperator}；提示=\"{operatorHint}\"；" +
             $"工程师下按钮可用={roiOpenForEngineer}、提示已清空={hintGone}");
 
+        // ---- UI-24 手部 21 关节模型：真加载、真推理 ----
+        //
+        // 这条用例的价值在于：它在**现场那台机器上**验证 ONNX Runtime 能加载、
+        // 模型能跑、关键点能解出来。模型/原生库这类东西"我这边能跑、现场跑不了"是常态
+        // （缺 VC 运行库、缺 DLL、路径不对），所以必须做成每次重建都真跑一次。
+        string poseModel = Path.Combine(AppContext.BaseDirectory, "Assets", "models", "hand_pose.onnx");
+        string poseImage = Path.Combine(AppContext.BaseDirectory, "Assets", "pose-test.png");
+        bool poseOk = false;
+        string poseDetail;
+        try
+        {
+            if (!File.Exists(poseModel))
+            {
+                poseDetail = "找不到手部模型：" + poseModel;
+            }
+            else if (!File.Exists(poseImage))
+            {
+                poseDetail = "找不到测试图：" + poseImage;
+            }
+            else
+            {
+                var bitmap = System.Windows.Media.Imaging.BitmapFrame.Create(new Uri(poseImage));
+                if (bitmap.CanFreeze) bitmap.Freeze();
+
+                using var estimator = new HandPoseEstimator(poseModel);
+
+                var watch = System.Diagnostics.Stopwatch.StartNew();
+                var hand = estimator.Estimate(bitmap, null, minScore: 0.3);
+                watch.Stop();
+
+                if (hand is null)
+                {
+                    poseDetail = $"模型跑通了，但这张图上没认出手（耗时 {watch.ElapsedMilliseconds}ms）";
+                }
+                else
+                {
+                    double minX = hand.Points.Min(p => p.X), maxX = hand.Points.Max(p => p.X);
+                    double minY = hand.Points.Min(p => p.Y), maxY = hand.Points.Max(p => p.Y);
+                    double spread = Math.Max(maxX - minX, maxY - minY);
+
+                    poseOk = hand.Points.Count == 21 && hand.Score > 0.5 && spread > 20;
+                    poseDetail = $"分数 {hand.Score:F2}；21 个关节，张开范围 {spread:F0}px；" +
+                                 $"耗时 {watch.ElapsedMilliseconds}ms";
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            poseDetail = "异常：" + ex.GetType().Name + " " + ex.Message;
+        }
+
+        Check("UI-24 手部 21 关节：ONNX 模型能加载、能推理、在测试图上认出手并给出 21 个关节点",
+            poseOk, poseDetail);
+
         // ---- 十八·建图三件事（UI-01~03）----
         //
         // 这三条是这次现场问题（"按住拖拽画不出框"）的回归测试。

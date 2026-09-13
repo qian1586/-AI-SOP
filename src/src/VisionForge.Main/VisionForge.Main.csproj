@@ -30,6 +30,35 @@
     </Content>
   </ItemGroup>
 
+  <!--
+    手部关键点：ONNX Runtime + 模型。
+
+    刻意**不用 NuGet 包**，而是直接引用 src\lib\onnxruntime 下的两个 DLL：
+      1. onnxruntime 的 NuGet 包有 108MB（装着所有平台的原生库），我们只要 Windows x64 的 11.6MB；
+      2. 现场重建时不必再联网拉包 —— 有几次车间网络是连不上 nuget.org 的。
+    原生 DLL 必须落到 exe 同级目录（CopyToOutputDirectory），否则运行时报找不到 onnxruntime。
+  -->
+  <ItemGroup>
+    <Reference Include="Microsoft.ML.OnnxRuntime">
+      <HintPath>..\..\lib\onnxruntime\Microsoft.ML.OnnxRuntime.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="..\..\lib\onnxruntime\onnxruntime.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\..\lib\onnxruntime\onnxruntime_providers_shared.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Assets\models\hand_pose.onnx">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Assets\pose-test.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>

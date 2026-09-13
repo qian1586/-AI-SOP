@@ -162,6 +162,9 @@ public sealed partial class MainViewModel
             // 权限：读回账号（口令哈希）并拉起会话超时检查
             LoadSecurity();
 
+            // 手部关键点：如果开关是开着的，现在就起定时器（默认就是开）
+            ApplyPoseToggle(ShowPosePoints);
+
             // 加载最近的历史记录到表格
             try
             {

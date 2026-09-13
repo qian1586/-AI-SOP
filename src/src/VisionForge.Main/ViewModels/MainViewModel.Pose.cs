@@ -32,6 +32,7 @@ public sealed partial class MainViewModel
         {
             if (!SetProperty(ref _showPosePoints, value)) return;
             OnPropertyChanged(nameof(PoseButtonText));
+            ApplyPoseToggle(value);      // 打开就开始跑手部模型，关掉就停（见 PoseOnnx 分部）
         }
     }
 
@@ -46,7 +47,7 @@ public sealed partial class MainViewModel
     {
         ShowPosePoints = !ShowPosePoints;
         StatusMessage = ShowPosePoints
-            ? "已显示手部关键点（当前来自过程监测的模拟手轨迹；接入手部模型后即为真实关键点）"
+            ? "已显示手部关键点（真实模型：ONNX 手部 21 关节，跑在彩色预览画面上）"
             : "已隐藏手部关键点";
     }
 
@@ -113,6 +114,34 @@ public sealed class PosePoint : ObservableObject
         Y = y;
         Visible = true;
     }
+
+    /// <summary>
+    /// 带置信度的移动：关节自己置信度太低（模型也不确定）就点暗一点。
+    /// 现场一眼能看出"这个点是模型猜的"，不会把猜的当成测到的。
+    /// </summary>
+    internal void Move(double x, double y, bool confident)
+    {
+        X = x;
+        Y = y;
+        Visible = true;
+        Confident = confident;
+    }
+
+    private bool _confident = true;
+
+    /// <summary>这个关节的置信度够不够（不够就画暗一点）。</summary>
+    public bool Confident
+    {
+        get => _confident;
+        internal set
+        {
+            if (!SetProperty(ref _confident, value)) return;
+            OnPropertyChanged(nameof(Opacity));
+        }
+    }
+
+    /// <summary>低置信度的点用半透明显示。</summary>
+    public double Opacity => _confident ? 1.0 : 0.35;
 
     internal void Hide() => Visible = false;
 }

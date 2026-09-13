@@ -423,8 +423,20 @@
 
                             <!--
                                 手部关键点叠加（参考界面那个绿色骨架）。
-                                数据来自过程监测的手部姿态；当前是模拟手轨迹 —— 开关的提示里也照实写了。
+                                数据现在是**真实模型**输出：ONNX 手部 21 关节跑在彩色预览画面上，
+                                绿线 = 骨架连线、黄点 = 关节（置信度低的点会自动变暗）。
                             -->
+                            <Canvas IsHitTestVisible="False"
+                                    Visibility="{Binding ShowPosePoints, Converter={StaticResource BoolToVisibility}}">
+                                <Polyline Points="{Binding HandSkeleton}"
+                                          Stroke="#00E676" StrokeThickness="2" Opacity="0.9"/>
+                                <Rectangle Width="{Binding HandBox.Width}" Height="{Binding HandBox.Height}"
+                                           Canvas.Left="{Binding HandBox.X}" Canvas.Top="{Binding HandBox.Y}"
+                                           Stroke="#00E676" StrokeThickness="1"
+                                           StrokeDashArray="3 2" Fill="Transparent"
+                                           Visibility="{Binding HasHandBox, Converter={StaticResource BoolToVisibility}}"/>
+                            </Canvas>
+
                             <ItemsControl ItemsSource="{Binding PosePoints}"
                                           Visibility="{Binding ShowPosePoints, Converter={StaticResource BoolToVisibility}}"
                                           IsHitTestVisible="False">
@@ -443,8 +455,10 @@
                                 </ItemsControl.ItemContainerStyle>
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
-                                        <Ellipse Width="8" Height="8" Margin="-4,-4,0,0"
-                                                 Fill="#8822C55E" Stroke="#CC7CFF9A" StrokeThickness="1"/>
+                                        <!-- 关节：置信度低的点自动变暗（见 PosePoint.Opacity） -->
+                                        <Ellipse Width="7" Height="7" Margin="-3.5,-3.5,0,0"
+                                                 Opacity="{Binding Opacity}"
+                                                 Fill="#FFEF4444" Stroke="#FFFFE082" StrokeThickness="1"/>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
@@ -570,6 +584,19 @@
                     </StackPanel>
 
                     <!-- 标定模式提示条（画面顶部中央） -->
+                    <!--
+                        手部关键点状态（画面左上角）：认没认出手、置信度多少、耗时多少、手在哪个框里。
+                        "手在哪个框里"就是后面要做"手部轨迹 → 工序判定"的入口。
+                    -->
+                    <Border Grid.Row="0" Background="#CC0F1827" CornerRadius="4" Padding="7,3"
+                            HorizontalAlignment="Left" VerticalAlignment="Top" Margin="10,10,0,0"
+                            Visibility="{Binding ShowPosePoints, Converter={StaticResource BoolToVisibility}}">
+                        <StackPanel>
+                            <TextBlock Text="{Binding PoseStatusText}" Foreground="#FF00E676" FontSize="10"/>
+                            <TextBlock Text="{Binding HandZoneText}" Foreground="{StaticResource TextSecond}" FontSize="10"/>
+                        </StackPanel>
+                    </Border>
+
                     <Border Grid.Row="0" Background="#CC0F1827"
                             BorderBrush="{StaticResource BorderAccent}" BorderThickness="1"
                             CornerRadius="4" Padding="12,6"

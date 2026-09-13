@@ -830,6 +830,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         // 而现场看到的现象是"明明学了，重开就少了几条"。
         FlushRoiSamples();
 
+        // 手部关键点：定时器停掉、ONNX 会话释放（原生资源，不释放会留到进程退出）
+        StopHandPose();
+        _handEstimator?.Dispose();
+        _handEstimator = null;
+
         // 解绑状态机事件，避免停机过程中回调进来碰已释放的界面状态
         Sop.Alarm -= OnSopAlarm;
 
