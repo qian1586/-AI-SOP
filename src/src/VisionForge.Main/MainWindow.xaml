@@ -831,6 +831,28 @@
                                         Margin="0,0,8,4" Padding="8,3" FontSize="10"
                                         ToolTip="这个框教错了，一键重来"/>
 
+                                <!--
+                                    按类别教（把"有没有"升级成"是哪一类"）：
+                                    写类别名 → 把那一类东西放上去 → 点「＋ 记这一类」，一个框可以教好几类。
+                                    右边再写"这一步应该是哪一类"，识别出来对不上就报「装错」，空着报「漏装」。
+                                -->
+                                <TextBlock Text="类别名" Foreground="{StaticResource TextMuted}"
+                                           FontSize="10" VerticalAlignment="Center" Margin="0,0,4,4"
+                                           ToolTip="例：功能件 / 外壳 / 小盖 / 导光柱 / 面盖 / 空"/>
+                                <TextBox Style="{StaticResource DarkInput}" Width="86" Margin="0,0,4,4"
+                                         Text="{Binding RoiClassNameInput, UpdateSourceTrigger=PropertyChanged}"
+                                         ToolTip="给这一类东西起个名字（例：导光柱），然后把东西放上去点右边的按钮"/>
+                                <Button Style="{StaticResource ToolButton}" Content="＋ 记这一类"
+                                        Command="{Binding CaptureRoiClassCommand}"
+                                        Margin="0,0,10,4" Padding="9,3" FontSize="10"
+                                        ToolTip="把当前画面记成「类别名」里写的那一类（同一个框可以教好几类）"/>
+
+                                <TextBlock Text="这一步应该是" Foreground="{StaticResource TextMuted}"
+                                           FontSize="10" VerticalAlignment="Center" Margin="0,0,4,4"/>
+                                <TextBox Style="{StaticResource DarkInput}" Width="120" Margin="0,0,10,4"
+                                         Text="{Binding ExpectedClassesText, UpdateSourceTrigger=LostFocus}"
+                                         ToolTip="写这一步完成时框里应该是什么（可写多个，用、分隔）。留空 = 按老规则（有东西/被拿走）判。认成别的类别判「装错」、空着判「漏装」"/>
+
                                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center"
                                             Margin="0,0,8,4">
                                     <TextBlock Text="{Binding RoiTargetSampleText}"

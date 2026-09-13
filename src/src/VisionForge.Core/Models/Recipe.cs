@@ -95,6 +95,17 @@ public sealed class RoiRegion
     /// </summary>
     public bool DoneWhenAbsent { get; set; }
 
+    /// <summary>
+    /// 这一步完成时，框里**应该是哪几类东西**（可写多个，逗号分隔）。
+    ///
+    /// <para>例：第 4 步「装入导光柱」的框 → 期望类别 = <c>导光柱</c>。
+    /// 识别出来是"导光柱" → 通过；识别出来是"外壳" → **装错**；识别出来是"空" → **装漏**。
+    /// 这就是把"框里有没有东西"升级成"框里是哪一类"的落点。</para>
+    ///
+    /// <para>留空 = 用旧的二值规则（见 <see cref="DoneWhenAbsent"/>），老配方不用改。</para>
+    /// </summary>
+    public List<string> ExpectedClasses { get; set; } = new();
+
     /// <summary>按实际分辨率换算成像素矩形 (x, y, w, h)。</summary>
     public (int X, int Y, int W, int H) ToPixels(int imageWidth, int imageHeight) =>
         ((int)(X * imageWidth), (int)(Y * imageHeight),

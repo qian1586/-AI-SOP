@@ -1076,6 +1076,42 @@ public sealed class SelfTestRunner
             $"默认模式[有东西=完成]={presentMode}；" +
             $"改成[被拿走=完成]后：笔在={stillThere}（应为 False）、笔拿走={takenAway}（应为 True）");
 
+        // ---- UI-23 按类别判：装对 / 装错 / 漏装 要能分开 ----
+        //
+        // 这是"方向对齐"的第一块地基：从"框里有没有东西"升级成"框里是哪一类"。
+        // 现场要的正是这个分辨率 —— 只报一个 NG，操作员还得自己去猜是没装还是装错。
+        for (int i = 0; i < 2; i++)
+        {
+            vm.BeginRoiDraft(800 + i * 30, 300);
+            vm.UpdateRoiDraft(860 + i * 30, 360);
+            vm.CommitRoiDraft();
+        }
+
+        var classOptions = vm.RoiTargets.ToList();
+        vm.SelectedRoiTarget = classOptions[0];
+        vm.ExpectedClassesText = "导光柱";     // 这一步应该是导光柱
+
+        bool expectedAccepted = vm.IsStepCompleted(1, true, "导光柱");
+        bool wrongPartCaught = !vm.IsStepCompleted(1, true, "外壳");
+        bool missingPartCaught = !vm.IsStepCompleted(1, false, "空");
+
+        string describeRight = vm.DescribeStepResult(1, "导光柱");
+        string describeWrong = vm.DescribeStepResult(1, "外壳");
+        string describeMissing = vm.DescribeStepResult(1, "空");
+
+        vm.ClearRoisCommand.Execute(null);
+
+        Check("UI-23 按类别判：认出「导光柱」=通过；认成「外壳」=装错；认成「空」=漏装 —— 三种结果分开报",
+            classOptions.Count == 2
+            && expectedAccepted
+            && wrongPartCaught
+            && missingPartCaught
+            && describeRight.Contains("正确")
+            && describeWrong.Contains("装错")
+            && describeMissing.Contains("漏装"),
+            $"期望「导光柱」时：认出导光柱={expectedAccepted}（{describeRight}）；" +
+            $"认出外壳={describeWrong}；认出空={describeMissing}");
+
         // ---- 首页底部状态条（UI-11）----
         Check("UI-11 底部状态条：工单号/步骤进度/合规率/工位状态都能算出来（未接相机时明确显示「未连接」）",
             vm.WorkOrderText.StartsWith("WO-")

@@ -57,6 +57,7 @@ public sealed partial class MainViewModel
             if (!SetProperty(ref _selectedRoiTarget, value)) return;
             RefreshSelectedRoiSamples();
             OnPropertyChanged(nameof(RoiTargetSampleText));
+            OnPropertyChanged(nameof(ExpectedClassesText));   // 换框要跟着换"这一步应该是"
             OnPropertyChanged(nameof(CanUseRoiLearning));
             (CaptureRoiOkCommand as RelayCommand)?.RaiseCanExecuteChanged();
             (CaptureRoiNgCommand as RelayCommand)?.RaiseCanExecuteChanged();
@@ -77,6 +78,9 @@ public sealed partial class MainViewModel
 
     /// <summary>开始 / 停止按框识别。</summary>
     public ICommand ToggleRoiLearnCommand { get; }
+
+    /// <summary>按"类别名"教一条样本（例：把导光柱装上去，点它）。</summary>
+    public ICommand CaptureRoiClassCommand { get; }
 
     /// <summary>点步骤条上的小方框 = 选中这个框去教它（一个框就一格）。</summary>
     public ICommand SelectRoiTargetCommand { get; }
@@ -212,6 +216,76 @@ public sealed partial class MainViewModel
     /// <summary>选中了框才谈得上教样本。</summary>
     public bool CanUseRoiLearning => _selectedRoiTarget is not null;
 
+    // ------------------------------------------------------------------
+    // 类别教示（把"有没有"升级成"是哪一类"）
+    // ------------------------------------------------------------------
+
+    private string _roiClassNameInput = string.Empty;
+
+    /// <summary>界面上的「类别名」输入框（例：功能件 / 外壳 / 小盖 / 导光柱 / 面盖 / 空）。</summary>
+    public string RoiClassNameInput
+    {
+        get => _roiClassNameInput;
+        set => SetProperty(ref _roiClassNameInput, value);
+    }
+
+    /// <summary>当前选中的框"应该是哪几类"（逗号/顿号分隔，可多个）。</summary>
+    public string ExpectedClassesText
+    {
+        get
+        {
+            var roi = SelectedRoiRegion();
+            return roi is null ? string.Empty : string.Join("、", roi.ExpectedClasses);
+        }
+        set
+        {
+            var roi = SelectedRoiRegion();
+            if (roi is null) return;
+
+            var list = (value ?? string.Empty)
+                .Split(new[] { '、', ',', '，', ';', '；', '/', ' ' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(s => s.Trim())
+                .Where(s => s.Length > 0)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (list.SequenceEqual(roi.ExpectedClasses, StringComparer.OrdinalIgnoreCase)) return;
+
+            roi.ExpectedClasses = list;
+            if (ActiveRecipe is not null) SaveRecipeInBackground(ActiveRecipe);
+
+            _roiLastStates.Clear();      // 判定基准变了，别拿两种口径混着推流程
+            OnPropertyChanged();
+
+            RoiLearnHint = list.Count == 0
+                ? "这一步没设期望类别：按老规则判（有东西 / 被拿走）"
+                : $"这一步应该是：{string.Join(" / ", list)} —— 认对了才算完成，认成别的判「装错」、空着判「漏装」";
+            StatusMessage = RoiLearnHint;
+        }
+    }
+
+    /// <summary>当前框对应的配方区域。</summary>
+    private RoiRegion? SelectedRoiRegion()
+    {
+        var rois = ActiveRecipe?.Rois.Where(r => r.Enabled).ToList();
+        int index = _selectedRoiTarget?.Index ?? 0;
+        if (rois is null || index <= 0 || index > rois.Count) return null;
+        return rois[index - 1];
+    }
+
+    /// <summary>按类别教一条：把这一类东西放上去，写下名字，点它。</summary>
+    private void CaptureRoiClass()
+    {
+        string name = (RoiClassNameInput ?? string.Empty).Trim();
+        if (name.Length == 0)
+        {
+            RoiLearnHint = "先在上面「类别名」里写这一类叫什么（例：导光柱），再点「＋ 记这一类」";
+            return;
+        }
+
+        CaptureRoiSample(isOk: true, source: SampleSource.Manual, className: name);
+    }
+
     // ==================================================================
     // 载入 / 保存
     // ==================================================================
@@ -338,7 +412,7 @@ public sealed partial class MainViewModel
     /// <para>两者抓的都是"此刻这一帧"，区别只在身份：Corrected 是人工对系统的一次纠错，
     /// 信息量更高，所以永远不会被自学淘汰逻辑清掉。</para>
     /// </param>
-    private void CaptureRoiSample(bool isOk, string source = SampleSource.Manual)
+    private void CaptureRoiSample(bool isOk, string source = SampleSource.Manual, string? className = null)
     {
         var target = _selectedRoiTarget;
         if (target is null)
@@ -392,10 +466,13 @@ public sealed partial class MainViewModel
                 ImagePath = preview is null ? null : imagePath,
                 Feature = FrameFeature.Extract(frame, roi),   // 只取这个框里的特征
                 Source = source,
+                ClassName = className ?? string.Empty,
                 Confidence = 1,
-                Note = source == SampleSource.Corrected
-                    ? "人工纠错：纠正一次误判"
-                    : "人工教示",
+                Note = className is { Length: > 0 }
+                    ? $"按类别教示：{className}"
+                    : source == SampleSource.Corrected
+                        ? "人工纠错：纠正一次误判"
+                        : "人工教示",
             };
 
             _roiSamples.Add(sample);
@@ -657,9 +734,12 @@ public sealed partial class MainViewModel
                                && seq - 1 < roiList.Count
                                && roiList[seq - 1].DoneWhenAbsent;
 
+        // 认出来的类别（没按类别教过就是 OK/NG）
+        string recognizedClass = recognition.Match?.Label ?? string.Empty;
+
         bool? stepDone = recognition.IsOk is null
             ? null
-            : absentMeansDone ? recognition.IsOk == false : recognition.IsOk == true;
+            : IsStepCompleted(seq, recognition.IsOk, recognizedClass);
 
         // 颜色一律表达"这一步做到没有"：绿=做到了、红=还没、橙=拿不准。
         // 这样操作员看的永远是同一件事，不用去分辨"这个框是正着判还是反着判"。
@@ -688,14 +768,15 @@ public sealed partial class MainViewModel
         {
             RoiLearnResultText = recognition.IsOk switch
             {
-                true => absentMeansDone ? "有东西（未完成）" : "OK",
+                true => absentMeansDone ? "有东西（未完成）" : recognizedClass,
                 false => absentMeansDone ? "已拿走（完成）" : "NG",
                 _ => "无法判定",
             };
             RoiLearnStateKey = stateKey;
             RoiLearnConfidence = recognition.Confidence;
-            RoiLearnHint = recognition.Message +
-                           (absentMeansDone ? "｜本框完成条件：被拿走 = 这一步完成" : "");
+            RoiLearnHint = recognition.Message
+                           + (absentMeansDone ? "｜本框完成条件：被拿走 = 这一步完成" : "")
+                           + "｜判定：" + DescribeStepResult(seq, recognizedClass);
         }
 
         bool first = !_roiLastStates.TryGetValue(seq, out var previous);
@@ -715,14 +796,56 @@ public sealed partial class MainViewModel
     /// <para>公开出来是为了让自检能直接断言"拿走型工序"的判定：
     /// 没拿 = 框里还有东西 = 这一步没完成 = 流程推不动（判漏做）。</para>
     /// </summary>
-    public bool IsStepCompleted(int seq, bool? roiIsOk)
+    public bool IsStepCompleted(int seq, bool? roiIsOk, string? recognizedClass = null)
     {
         if (roiIsOk is null) return false;
 
         var rois = ActiveRecipe?.Rois.Where(r => r.Enabled).ToList();
-        bool absentMeansDone = rois is not null && seq - 1 < rois.Count && rois[seq - 1].DoneWhenAbsent;
+        if (rois is null || seq - 1 >= rois.Count) return roiIsOk == true;
 
-        return absentMeansDone ? roiIsOk == false : roiIsOk == true;
+        var roi = rois[seq - 1];
+
+        // ① 按类别判（新）：这一步"应该是哪几类"里有没有认出来的那一类
+        if (roi.ExpectedClasses is { Count: > 0 })
+        {
+            if (string.IsNullOrWhiteSpace(recognizedClass)) return false;
+
+            return roi.ExpectedClasses.Any(expected =>
+                string.Equals(expected.Trim(), recognizedClass.Trim(), StringComparison.OrdinalIgnoreCase));
+        }
+
+        // ② 退回二值判（旧）：有东西=完成 / 被拿走=完成
+        return roi.DoneWhenAbsent ? roiIsOk == false : roiIsOk == true;
+    }
+
+    /// <summary>
+    /// 这一步的结果怎么说人话：装对了 / 装错了 / 漏装了。
+    ///
+    /// <para>这是现场要的分辨率 —— 只报一个 NG，操作员还得自己去猜是没装还是装错。</para>
+    /// </summary>
+    public string DescribeStepResult(int seq, string? recognizedClass)
+    {
+        var rois = ActiveRecipe?.Rois.Where(r => r.Enabled).ToList();
+        if (rois is null || seq - 1 >= rois.Count) return string.Empty;
+
+        var roi = rois[seq - 1];
+        string recognized = string.IsNullOrWhiteSpace(recognizedClass) ? "无法判定" : recognizedClass;
+
+        if (roi.ExpectedClasses is not { Count: > 0 })
+            return recognized;
+
+        string expected = string.Join(" / ", roi.ExpectedClasses);
+
+        bool isExpected = roi.ExpectedClasses.Any(e =>
+            string.Equals(e.Trim(), recognized.Trim(), StringComparison.OrdinalIgnoreCase));
+
+        if (isExpected) return $"{recognized}（正确）";
+
+        // 空 / 没有 → 漏装；别的类别 → 装错
+        bool looksEmpty = recognized is "空" or "" || recognized == "NG";
+        return looksEmpty
+            ? $"漏装（框里什么也没有，应该是「{expected}」）"
+            : $"装错（识别为「{recognized}」，应该是「{expected}」）";
     }
 
     /// <summary>
@@ -747,6 +870,7 @@ public sealed partial class MainViewModel
         _lastRecognition.Clear();
         RebuildRoiLibrary();
         RefreshRoiTargetCounts();
+        OnPropertyChanged(nameof(ExpectedClassesText));
 
         RoiLearnHint = roi.DoneWhenAbsent
             ? $"第 {option.Index} 个框「{roi.Name}」改成：东西被拿走 = 这一步完成（取件/拿笔这类工序）"
@@ -788,6 +912,7 @@ public sealed partial class MainViewModel
         // 文案要说清"是这一步没完成"，而不是笼统的"识别为 NG" ——
         // 拿走型工序里"框里还有东西"恰恰是没做的意思，只说 NG 现场会看懵。
         bool absentMeansDone = IsAbsentMeansDone(seq);
+        string result = DescribeStepResult(seq, recognition.Match?.Label);
 
         var violation = new ProcessViolation
         {
@@ -795,8 +920,8 @@ public sealed partial class MainViewModel
             StepSeq = seq,
             TargetId = "P" + seq,
             Message = absentMeansDone
-                ? $"第 {seq} 步没做：框里的东西还在（本框完成条件是「被拿走」）"
-                : $"第 {seq} 个框识别为 NG：{recognition.Message}",
+                ? $"第 {seq} 步不合格：{result}"
+                : $"第 {seq} 步不合格：{result}（{recognition.Message}）",
         };
 
         var evidence = CaptureEvidence($"第 {seq} 个框 NG · {recognition.Match?.Display ?? "无匹配样本"}");

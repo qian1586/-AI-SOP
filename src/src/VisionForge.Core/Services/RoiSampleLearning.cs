@@ -40,6 +40,18 @@ public sealed class RoiSample : ISample
 
     public bool IsOk { get; set; }
 
+    /// <summary>
+    /// 这一条样本代表的"类别名"（功能件 / 外壳 / 小盖 / 导光柱 / 面盖 / 空 / 螺丝 …）。
+    ///
+    /// <para><b>为什么要有它：</b>只判"框里有没有东西"是防漏装；
+    /// 而现场要的是"认得出装的是不是那个东西"——装错和装漏必须能分开报。
+    /// 有了类别名，一个框就能教好几类（教 5 类零件），识别结果直接给出"是哪一类"，
+    /// 再和"这一步应该是哪一类"比对，就能区分「装错」和「装漏」。</para>
+    ///
+    /// <para>留空 = 老行为（只有 OK/NG 两类）。老样本文件不用改。</para>
+    /// </summary>
+    public string ClassName { get; set; } = string.Empty;
+
     public DateTime Timestamp { get; set; } = DateTime.Now;
 
     /// <summary>教这一条时的抓帧图（data\roi-samples\ 下）。</summary>
@@ -65,7 +77,10 @@ public sealed class RoiSample : ISample
     /// <summary>给人看的一句话：为什么会有这条样本。</summary>
     public string Note { get; set; } = string.Empty;
 
-    public string Label => IsOk ? "OK" : "NG";
+    /// <summary>识别时比对的"类别"：填了类别名就用它，没填就退回 OK / NG。</summary>
+    public string Label => string.IsNullOrWhiteSpace(ClassName)
+        ? (IsOk ? "OK" : "NG")
+        : ClassName;
 
     /// <summary>来源的短标签（界面缩略图下面显示）。</summary>
     public string SourceText => SampleSource.Describe(Source);
@@ -74,6 +89,9 @@ public sealed class RoiSample : ISample
     public bool IsAutoLearned => Source == SampleSource.Auto;
 
     public string Display => $"{Label} · {SourceText} · {Timestamp:HH:mm:ss}";
+
+    /// <summary>这条样本是不是"按类别教"的。</summary>
+    public bool HasClassName => !string.IsNullOrWhiteSpace(ClassName);
 }
 
 /// <summary>

@@ -215,6 +215,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         // 区域学习：按框教 OK / NG（基恩士抓取设定那套用法）
         CaptureRoiOkCommand = new RelayCommand(() => CaptureRoiSample(isOk: true), () => CanUseRoiLearning);
         CaptureRoiNgCommand = new RelayCommand(() => CaptureRoiSample(isOk: false), () => CanUseRoiLearning);
+        CaptureRoiClassCommand = new RelayCommand(CaptureRoiClass, () => CanUseRoiLearning);
         ClearRoiTargetSamplesCommand = new RelayCommand(ClearRoiTargetSamples, () => CanUseRoiLearning);
         ToggleRoiLearnCommand = new RelayCommand(ToggleRoiLearn,
             () => IsRoiLearning || (ActiveRecipe is not null && RoiTargets.Count > 0));
