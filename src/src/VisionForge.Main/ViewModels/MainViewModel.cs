@@ -243,6 +243,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         ImportVideoCommand = new AsyncRelayCommand(ImportVideoAsync, () => !IsBusy);
         ToggleVideoPlayCommand = new RelayCommand(ToggleVideoPlay, () => _videoCamera is not null);
         RestartVideoCommand = new RelayCommand(RestartVideo, () => _videoCamera is not null);
+        StopVideoCommand = new RelayCommand(StopVideoPlayback, () => _videoCamera is not null);
         OpenLogFolderCommand = new RelayCommand(OpenLogFolder);
 
         // 多工位联网 + MES 对接
@@ -350,6 +351,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(CanTuneRecipe));
         OnPropertyChanged(nameof(CanForceAdvance));
         OnPropertyChanged(nameof(RolePermissionText));
+        OnPropertyChanged(nameof(PermissionHintText));
+        OnPropertyChanged(nameof(HasPermissionHint));
         OnPropertyChanged(nameof(CanSeeRecipePage));
         OnPropertyChanged(nameof(CanSeeHistoryPage));
         OnPropertyChanged(nameof(CanSeeSettingsPage));

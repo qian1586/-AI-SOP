@@ -28,6 +28,9 @@ public sealed partial class MainViewModel
     /// <summary>从头再播一遍（换一件产品时用）。</summary>
     public ICommand RestartVideoCommand { get; }
 
+    /// <summary>停止并回到开头（不关闭录像，仍然是相机源）。</summary>
+    public ICommand StopVideoCommand { get; }
+
     /// <summary>打开日志目录（现场取证、发给供应商排查都用它）。</summary>
     public ICommand OpenLogFolderCommand { get; }
 
@@ -160,6 +163,18 @@ public sealed partial class MainViewModel
         RefreshVideoProgress();
         OnPropertyChanged(nameof(VideoPlayButtonText));
         StatusMessage = "录像已从头播放";
+    }
+
+    /// <summary>停止播放并倒回开头：一键停住，再点播放就从头发起。</summary>
+    private void StopVideoPlayback()
+    {
+        var video = _videoCamera;
+        if (video is null) return;
+
+        video.Stop();
+        RefreshVideoProgress();
+        OnPropertyChanged(nameof(VideoPlayButtonText));
+        StatusMessage = "录像已停止并回到开头";
     }
 
     /// <summary>由 200ms 定时器调用：刷新进度条与时间文案。</summary>

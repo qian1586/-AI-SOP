@@ -390,6 +390,27 @@ public sealed class SelfTestRunner
             backToWork.Ok && vm.IsEngineer,
             backToWork.Message + $"；当前角色 {vm.CurrentUser}");
 
+        // ---- AC-10 灰按钮必须解释自己 ----
+        //
+        // 现场反馈"标定 ROI 不能用，什么情况"：v2.3 把开机默认角色改成操作员之后，
+        // 那个按钮变灰了，而界面上一个字都没说 —— 权限系统被做成了故障。
+        // 这条用例要求：**没权限时，界面必须给出"为什么、去哪儿切"的提示**。
+        vm.AttemptRoleChange("操作员", null);
+        bool roiLockedForOperator = !vm.ToggleRoiEditCommand.CanExecute(null);
+        string operatorHint = vm.PermissionHintText;
+        bool hintExplains = !string.IsNullOrWhiteSpace(operatorHint)
+                            && operatorHint.Contains("操作员")
+                            && operatorHint.Contains("工程师");
+
+        vm.AttemptRoleChange("工程师", "wf-eng");
+        bool roiOpenForEngineer = vm.ToggleRoiEditCommand.CanExecute(null);
+        bool hintGone = string.IsNullOrEmpty(vm.PermissionHintText);
+
+        Check("AC-10 权限不够时按钮必须解释自己：操作员点不了「标定 ROI」但界面写清了原因和切换办法；切到工程师后按钮可用、提示消失",
+            roiLockedForOperator && hintExplains && roiOpenForEngineer && hintGone,
+            $"操作员下按钮不可用={roiLockedForOperator}；提示=\"{operatorHint}\"；" +
+            $"工程师下按钮可用={roiOpenForEngineer}、提示已清空={hintGone}");
+
         // ---- 十八·建图三件事（UI-01~03）----
         //
         // 这三条是这次现场问题（"按住拖拽画不出框"）的回归测试。

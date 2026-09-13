@@ -46,6 +46,21 @@ public sealed partial class MainViewModel
     public bool HasDefaultPasswords =>
         _access is not null && _access.RolesUsingDefaultPassword().Count > 0;
 
+    /// <summary>
+    /// 当前角色没权限做某些事时的提示文字。
+    ///
+    /// <para><b>为什么要专门做这一条：</b>v2.3 把开机默认角色改成"操作员"之后，
+    /// 顶部工具条上的「标定 ROI」按钮就变灰了 —— 但界面上没有任何说明，
+    /// 现场的原话是"标定 ROI 不能用，什么情况"。
+    /// 灰按钮不解释，等于把权限系统做成了故障。现在只要角色不够，
+    /// 工具条上就直接写出"为什么不能用、去哪儿切"。</para>
+    /// </summary>
+    public string PermissionHintText => IsOperator
+        ? "🔒 当前是「操作员」：标定 ROI / 改参数需要「技术员」或「工程师」权限 —— 点右上角 🔑 切换（工程师默认口令 888888）"
+        : string.Empty;
+
+    public bool HasPermissionHint => !CanTuneRecipe;
+
     public string SecurityHintText
     {
         get => _securityHint;
@@ -123,6 +138,8 @@ public sealed partial class MainViewModel
     private void RaiseSecurityProps()
     {
         OnPropertyChanged(nameof(HasDefaultPasswords));
+        OnPropertyChanged(nameof(PermissionHintText));
+        OnPropertyChanged(nameof(HasPermissionHint));
         OnPropertyChanged(nameof(SecurityHintText));
         OnPropertyChanged(nameof(SessionTimeoutMinutes));
         OnPropertyChanged(nameof(OperatorNeedsPassword));

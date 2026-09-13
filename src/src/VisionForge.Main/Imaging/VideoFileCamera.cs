@@ -185,6 +185,21 @@ public sealed class VideoFileCamera : ICamera
         IsPlaying = true;
     }
 
+    /// <summary>
+    /// 停止播放并回到开头（**不关闭文件**，仍然是这台"相机"）。
+    ///
+    /// <para>和 <see cref="Pause"/> 的区别：暂停是"停在这一帧"，
+    /// 停止是"停下来并倒回第 1 帧"，下一次播放从头发起。
+    /// 现场要的是"点一下停住、再点一下从头来"，所以给了独立的停止。</para>
+    /// </summary>
+    public void Stop()
+    {
+        if (_player is null) return;
+        _player.Pause();
+        _player.Position = TimeSpan.Zero;
+        IsPlaying = false;
+    }
+
     // ------------------------------------------------------------------
     private void PumpFrame()
     {

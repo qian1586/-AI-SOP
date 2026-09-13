@@ -214,6 +214,11 @@
                         Margin="0,0,6,6" Padding="12,5" FontSize="11"
                         Visibility="{Binding IsVideoSource, Converter={StaticResource BoolToVisibility}}"
                         ToolTip="播放 / 暂停录像"/>
+                <Button Style="{StaticResource ToolButton}" Content="■ 停止"
+                        Command="{Binding StopVideoCommand}"
+                        Margin="0,0,6,6" Padding="12,5" FontSize="11"
+                        Visibility="{Binding IsVideoSource, Converter={StaticResource BoolToVisibility}}"
+                        ToolTip="停止播放并回到开头（录像仍然当相机用；再点播放就从第一帧开始）"/>
                 <Button Style="{StaticResource ToolButton}" Content="⟲ 从头再播"
                         Command="{Binding RestartVideoCommand}"
                         Margin="0,0,6,6" Padding="12,5" FontSize="11"
@@ -241,6 +246,18 @@
                                FontSize="11" VerticalAlignment="Center" Margin="10,0,0,0"
                                TextTrimming="CharacterEllipsis" MaxWidth="180"/>
                 </StackPanel>
+
+                <!--
+                    权限提示：角色不够时按钮会是灰的，这里必须写出"为什么灰、去哪儿切"。
+                    现场反馈过"标定 ROI 不能用，什么情况" —— 就是因为当时只有灰按钮、没有一句解释。
+                -->
+                <TextBlock Text="{Binding PermissionHintText}"
+                           Foreground="{StaticResource StateWarn}"
+                           FontSize="11" VerticalAlignment="Center"
+                           Margin="0,0,10,6" MaxWidth="560"
+                           TextTrimming="CharacterEllipsis"
+                           ToolTip="{Binding PermissionHintText}"
+                           Visibility="{Binding HasPermissionHint, Converter={StaticResource BoolToVisibility}}"/>
 
                 <!-- 声光报警状态：原来在右下角卡片里，挪上来后一眼就能看到 -->
                 <Border CornerRadius="4" Padding="10,5" Margin="0,0,10,6" VerticalAlignment="Center">
@@ -512,7 +529,8 @@
                             <Button Style="{StaticResource ToolButton}"
                                     Content="{Binding RoiEditButtonText}"
                                     Command="{Binding ToggleRoiEditCommand}"
-                                    Margin="6,0,0,3" Padding="9,3" FontSize="10"/>
+                                    Margin="6,0,0,3" Padding="9,3" FontSize="10"
+                                    ToolTip="进入/退出 ROI 标定：左键拖拽画框，右键改设置或删除。需要「技术员」或「工程师」权限（操作员用不了）"/>
 
                             <!-- 清空 ROI（仅编辑模式显示） -->
                             <Button Style="{StaticResource ToolButton}"
