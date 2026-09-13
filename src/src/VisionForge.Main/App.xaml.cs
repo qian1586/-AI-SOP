@@ -310,6 +310,28 @@ public partial class App : Application
 
                 window.Close();
 
+                // ---- 登录框也真开一次 ----
+                // 它是权限的唯一入口：这里要是渲染不出来，现场就永远进不了工程师，
+                // 而那条路只在"有人想切角色"时才走得到，靠人工验收很容易漏。
+                string loginNote;
+                try
+                {
+                    var loginProbe = new LoginWindow(
+                        Core.Services.Roles.Engineer,
+                        Core.Services.Roles.Describe(Core.Services.UserRole.Engineer),
+                        "（冒烟自检：这是故意传进去的测试提示）",
+                        usingDefaultPassword: true);
+
+                    loginProbe.Show();
+                    PumpMessages(loginProbe.Dispatcher);
+                    loginProbe.Close();
+                    loginNote = "✔ 登录框能正常打开";
+                }
+                catch (Exception loginEx)
+                {
+                    loginNote = "⚠ 登录框打不开：" + loginEx.Message;
+                }
+
                 File.WriteAllText(smokeReport,
                     "界面冒烟自检：通过" + Environment.NewLine +
                     $"时间：{DateTime.Now:yyyy-MM-dd HH:mm:ss}" + Environment.NewLine +
@@ -320,7 +342,8 @@ public partial class App : Application
                 // 把布局体检结果追加进报告（单独一段，方便一眼看到）
                 File.AppendAllText(smokeReport,
                     Environment.NewLine + "---------- 布局体检 ----------" + Environment.NewLine +
-                    layoutNote + Environment.NewLine,
+                    layoutNote + Environment.NewLine +
+                    "登录框：" + loginNote + Environment.NewLine,
                     new System.Text.UTF8Encoding(true));
 
                 Console.WriteLine("[冒烟自检] 通过：界面能正常打开（XAML / 资源 / 转换器 / 绑定都过了一遍）");

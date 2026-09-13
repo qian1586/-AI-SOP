@@ -69,6 +69,11 @@ public partial class MainWindow : Window
 
         DataContextChanged += OnDataContextChanged;
 
+        // 权限会话：任何鼠标/键盘动作都算"人还在"（空闲超时会自动退回操作员）。
+        // 用隧道事件挂在窗口根上，界面上任何地方的操作都算数。
+        PreviewMouseDown += (_, _) => _boundViewModel?.TouchActivity();
+        PreviewKeyDown += (_, _) => _boundViewModel?.TouchActivity();
+
         // ROI 标定：在基准画布上挂鼠标事件。
         //
         // 用 Preview（隧道）而不是普通冒泡事件：隧道从根往下走，先于任何子控件触发，
@@ -212,6 +217,100 @@ public partial class MainWindow : Window
         else _boundViewModel.NoteRoiAction("先点「启动监测」让相机出图，再标记误判");
     }
 
+    // ==================================================================
+    // 权限：角色切换要口令
+    // ==================================================================
+
+    /// <summary>
+    /// 有人在下拉框里选了更高权限的角色。
+    ///
+    /// <para>口令错就一直让他重试（带上刚才的错误提示），取消则什么都不变 ——
+    /// 下拉框在 ViewModel 那边已经弹回原值了。</para>
+    /// </summary>
+    private void OnRoleChangeRequested(object? sender, RoleChangeRequest request)
+    {
+        if (_boundViewModel is null) return;
+
+        string? error = null;
+
+        // 最多让现场试 5 轮：再多说明不是本人，直接放弃（服务端也会临时锁定）
+        for (int attempt = 0; attempt < 5; attempt++)
+        {
+            bool usingDefault = _boundViewModel.Access?
+                .Get(request.Role).IsDefaultPassword == true;
+
+            var dialog = new LoginWindow(
+                request.Role,
+                Core.Services.Roles.Describe(request.Target),
+                error,
+                usingDefault)
+            { Owner = this };
+
+            if (dialog.ShowDialog() != true) return;      // 点了取消
+
+            var result = _boundViewModel.AttemptRoleChange(request.Role, dialog.EnteredPassword);
+            if (result.Ok) return;
+
+            error = result.Message;
+        }
+    }
+
+    /// <summary>设置页：改口令（密码框不与 ViewModel 绑定，值在这里取）。</summary>
+    private void OnChangePasswordClick(object sender, RoutedEventArgs e)
+    {
+        if (_boundViewModel is null) return;
+
+        string role = PasswordRoleBox.SelectedItem as string
+                      ?? Core.Services.Roles.Operator;
+
+        _boundViewModel.SubmitPasswordChange(
+            role,
+            PasswordOldBox.Password,
+            PasswordNewBox.Password,
+            PasswordConfirmBox.Password);
+
+        // 不管成没成，都把输入清掉：口令不该在界面控件里多留一秒
+        PasswordOldBox.Clear();
+        PasswordNewBox.Clear();
+        PasswordConfirmBox.Clear();
+    }
+
+    /// <summary>设置页：把某角色恢复成出厂默认口令（需要工程师口令）。</summary>
+    private void OnResetPasswordClick(object sender, RoutedEventArgs e)
+    {
+        if (_boundViewModel is null) return;
+
+        string role = PasswordRoleBox.SelectedItem as string
+                      ?? Core.Services.Roles.Operator;
+
+        var answer = MessageBox.Show(this,
+            $"把「{role}」恢复成出厂默认口令？\n\n" +
+            "用途只有一个：现场把口令忘了，进不去的时候救回来。\n" +
+            "恢复后请立刻改成新口令 —— 默认口令等于没上锁。",
+            "恢复默认口令",
+            MessageBoxButton.OKCancel, MessageBoxImage.Warning);
+
+        if (answer != MessageBoxResult.OK) return;
+
+        var dialog = new LoginWindow(Core.Services.Roles.Engineer,
+                                     "恢复默认口令需要工程师权限",
+                                     null,
+                                     usingDefaultPassword: false)
+        { Owner = this };
+
+        if (dialog.ShowDialog() != true) return;
+
+        if (!_boundViewModel.ResetRolePassword(role, dialog.EnteredPassword))
+        {
+            MessageBox.Show(this, "工程师口令不正确，未做任何修改。", "恢复默认口令",
+                            MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+
+        PasswordOldBox.Clear();
+        PasswordNewBox.Clear();
+        PasswordConfirmBox.Clear();
+    }
+
     /// <summary>
     /// 配方页切换检测算法。参数面板的内容由算法自己声明，
     /// 所以换算法必须重建面板（这是"插件化 + 动态参数"能成立的前提）。
@@ -251,6 +350,7 @@ public partial class MainWindow : Window
         {
             _boundViewModel.Alarm -= OnAlarm;
             _boundViewModel.PropertyChanged -= OnViewModelPropertyChanged;
+            _boundViewModel.RoleChangeRequested -= OnRoleChangeRequested;
         }
 
         _boundViewModel = e.NewValue as MainViewModel;
@@ -259,6 +359,7 @@ public partial class MainWindow : Window
         {
             _boundViewModel.Alarm += OnAlarm;
             _boundViewModel.PropertyChanged += OnViewModelPropertyChanged;
+            _boundViewModel.RoleChangeRequested += OnRoleChangeRequested;
         }
 
         // 按配置里的界面缩放倍数调整窗口大小（放大后超出屏幕就最大化）

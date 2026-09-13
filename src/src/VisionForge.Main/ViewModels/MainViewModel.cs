@@ -49,7 +49,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private BitmapSource? _previewImage;
     private string _batchNo = DateTime.Now.ToString("yyyyMMdd");
     private string _currentOperator = "操作员";
-    private string _currentUser = "工程师";
+    /// <summary>
+    /// 启动时的角色。
+    ///
+    /// <para><b>必须是操作员</b>：以前默认是工程师，等于开机就有全部权限 ——
+    /// 现场反馈"这个权限没有设计好"，最主要的就是这一条。
+    /// 想改配方/参数，开机后自己去切角色、验口令。</para>
+    /// </summary>
+    private string _currentUser = Core.Services.Roles.Operator;
 
     private string _lastActionText = "尚未执行模拟动作";
     private string _outcomeText = "尚未执行检测";
@@ -288,22 +295,17 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
-    /// 当前角色。切换会立即生效：按钮可用状态跟着变（不是摆设）。
-    /// 真正的账号密码登录后续再接，这里先做角色权限。
+    /// 当前角色（界面下拉框绑的就是它）。
+    ///
+    /// <para><b>注意它现在不是"直接赋值"</b>：赋值会走
+    /// <c>RequestRoleChange</c> —— 降级直接放行，升级必须先过口令，
+    /// 口令不对时下拉框会自动弹回原值。真正的校验与生效在
+    /// <c>MainViewModel.Security.cs</c>。</para>
     /// </summary>
     public string CurrentUser
     {
         get => _currentUser;
-        set
-        {
-            if (!SetProperty(ref _currentUser, value)) return;
-
-            RaiseRoleProps();
-            RefreshCommands();
-
-            StatusMessage = $"当前角色：{value} —— {RolePermissionText}";
-            _log.Info($"角色切换为 {value}（{RolePermissionText}）");
-        }
+        set => RequestRoleChange(value);
     }
 
     /// <summary>可选角色三档。</summary>

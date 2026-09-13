@@ -131,12 +131,12 @@
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="🔑" FontSize="12" VerticalAlignment="Center"
                                        Margin="0,0,6,0"/>
-                            <!-- 角色下拉：工程师 / 操作员 / 质检员 -->
+                            <!-- 角色下拉：工程师 / 技术员 / 操作员（往上升要口令，往下退不用） -->
                             <ComboBox ItemsSource="{Binding UserRoles}"
                                       SelectedItem="{Binding CurrentUser}"
                                       Style="{StaticResource DarkCombo}"
                                       Width="96" VerticalAlignment="Center"
-                                      ToolTip="当前角色（首版先做三档，权限校验后续接登录模块）"/>
+                                      ToolTip="当前角色。往上升要输入该角色的口令；退回操作员不需要。空闲一段时间会自动退回操作员"/>
                         </StackPanel>
                     </Border>
 
@@ -2296,6 +2296,112 @@
                             config\appsettings.json 里的 "UiScale": 1.0 就行（0.8~1.6）。
                         -->
                         <!-- 过程层规则 -->
+                        <!--
+                            ===== 账号与权限 =====
+                            三档角色（工程师 / 技术员 / 操作员）的口令与策略。
+                            以前这个下拉框是"谁点一下都能切"，等于没有权限 ——
+                            现在升级要口令，并且空闲到时间会自动退回操作员。
+
+                            PasswordBox 刻意不做数据绑定：口令不进 ViewModel 的普通属性，
+                            值由窗口代码取出来直接交给权限服务，用完立刻清空控件。
+                        -->
+                        <Border Style="{StaticResource CardBorder}" Padding="14" Margin="0,0,0,10">
+                            <StackPanel>
+                                <TextBlock Text="账号与权限" Foreground="{StaticResource TextPrimary}"
+                                           FontSize="14" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                <TextBlock Text="{Binding RolePermissionText}" Foreground="{StaticResource TextSecond}"
+                                           FontSize="11" TextWrapping="Wrap"/>
+
+                                <TextBlock Foreground="{StaticResource StateWarn}" FontSize="11"
+                                           TextWrapping="Wrap" Margin="0,6,0,0"
+                                           Text="⚠ 还有角色在用出厂默认口令（工程师 888888 / 技术员 123456）。默认口令等于没上锁，请立刻改成现场自己的口令。"
+                                           Visibility="{Binding HasDefaultPasswords, Converter={StaticResource BoolToVisibility}}"/>
+
+                                <WrapPanel Margin="0,10,0,0">
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,14,8">
+                                        <TextBlock Text="空闲自动退回操作员" Foreground="{StaticResource TextSecond}"
+                                                   FontSize="11" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                        <TextBox Style="{StaticResource DarkInput}" Width="52"
+                                                 Text="{Binding SessionTimeoutMinutes, UpdateSourceTrigger=LostFocus}"
+                                                 ToolTip="多少分钟没人操作就自动退回操作员（0 = 不自动）。工程师调完参数就走，这一条防止下一个人直接改配置"/>
+                                        <TextBlock Text="分钟" Foreground="{StaticResource TextSecond}"
+                                                   FontSize="11" VerticalAlignment="Center" Margin="6,0,0,0"/>
+                                    </StackPanel>
+
+                                    <CheckBox Content="切到操作员也要口令" Foreground="{StaticResource TextPrimary}"
+                                              FontSize="11" VerticalAlignment="Center" Margin="0,0,14,8"
+                                              IsChecked="{Binding OperatorNeedsPassword}"
+                                              ToolTip="默认关：生产岗位本来就该直接能用。只有需要「谁在操作」可追溯时才打开"/>
+                                </WrapPanel>
+
+                                <!-- 改口令：角色 + 原口令 + 新口令 + 确认 -->
+                                <WrapPanel Margin="0,2,0,0">
+                                    <TextBlock Text="修改口令" Foreground="{StaticResource TextPrimary}"
+                                               FontSize="12" FontWeight="SemiBold"
+                                               VerticalAlignment="Center" Margin="0,0,10,8"/>
+
+                                    <ComboBox x:Name="PasswordRoleBox" Style="{StaticResource DarkCombo}"
+                                              ItemsSource="{Binding UserRoles}" SelectedIndex="0"
+                                              Width="110" Margin="0,0,8,8"
+                                              ToolTip="要改哪个角色的口令"/>
+
+                                    <PasswordBox x:Name="PasswordOldBox" Width="110" Height="28" Padding="6,2"
+                                                 Margin="0,0,8,8"
+                                                 Background="{StaticResource BgPanelDeep}"
+                                                 Foreground="{StaticResource TextPrimary}"
+                                                 BorderBrush="{StaticResource BorderSoft}" BorderThickness="1"
+                                                 CaretBrush="{StaticResource TextAccent}"
+                                                 FontSize="12"
+                                                 ToolTip="原口令（第一次设置新口令时留空）"/>
+
+                                    <PasswordBox x:Name="PasswordNewBox" Width="110" Height="28" Padding="6,2"
+                                                 Margin="0,0,8,8"
+                                                 Background="{StaticResource BgPanelDeep}"
+                                                 Foreground="{StaticResource TextPrimary}"
+                                                 BorderBrush="{StaticResource BorderSoft}" BorderThickness="1"
+                                                 CaretBrush="{StaticResource TextAccent}"
+                                                 FontSize="12"
+                                                 ToolTip="新口令（至少 4 位，不能和出厂默认口令相同）"/>
+
+                                    <PasswordBox x:Name="PasswordConfirmBox" Width="110" Height="28" Padding="6,2"
+                                                 Margin="0,0,8,8"
+                                                 Background="{StaticResource BgPanelDeep}"
+                                                 Foreground="{StaticResource TextPrimary}"
+                                                 BorderBrush="{StaticResource BorderSoft}" BorderThickness="1"
+                                                 CaretBrush="{StaticResource TextAccent}"
+                                                 FontSize="12"
+                                                 ToolTip="再输一遍新口令"/>
+
+                                    <Button Style="{StaticResource PrimaryButton}" Content="改口令"
+                                            Click="OnChangePasswordClick"
+                                            Padding="10,4" FontSize="11" Margin="0,0,6,8"/>
+                                    <Button Style="{StaticResource ToolButton}" Content="恢复默认口令"
+                                            Click="OnResetPasswordClick"
+                                            Padding="10,4" FontSize="11" Margin="0,0,0,8"
+                                            ToolTip="口令忘了进不去时的补救手段：需要先验证工程师口令"/>
+                                </WrapPanel>
+
+                                <TextBlock Text="{Binding SecurityHintText}" Foreground="{StaticResource TextAccent}"
+                                           FontSize="11" TextWrapping="Wrap" Margin="0,2,0,8"/>
+
+                                <!-- 审计：谁什么时候切过角色、改过口令 -->
+                                <TextBlock Text="权限操作记录（最近 50 条，完整记录在 data\security\ 下）"
+                                           Foreground="{StaticResource TextSecond}" FontSize="11"/>
+                                <ScrollViewer MaxHeight="76" VerticalScrollBarVisibility="Auto" Margin="0,4,0,0">
+                                    <ItemsControl ItemsSource="{Binding AccessAudit}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding Display}"
+                                                           Foreground="{StaticResource TextMuted}"
+                                                           FontFamily="{StaticResource MonoFont}"
+                                                           FontSize="10" TextWrapping="Wrap"/>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+                            </StackPanel>
+                        </Border>
+
                         <Border Style="{StaticResource CardBorder}" Padding="14" Margin="0,0,0,10">
                             <StackPanel>
                                 <TextBlock Text="过程层规则（手部动作合规）" Foreground="{StaticResource TextPrimary}"

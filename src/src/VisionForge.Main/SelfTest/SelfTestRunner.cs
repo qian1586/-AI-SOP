@@ -274,20 +274,121 @@ public sealed class SelfTestRunner
         var vm = new MainViewModel(registry, recipes, history, mockPlc, alarmDevice, uiLogger,
                                    new EventAggregator(), settingsProvider);
 
-        vm.CurrentUser = "操作员";
+        // 角色切换现在走"要口令"的那条路（AttemptRoleChange），自检走的就是真实路径
+        vm.AttemptRoleChange("操作员", null);
         Check("CCD-014 操作员界面权限：配方/设置页不可见、参数与人工放行被锁，只剩作业功能",
             !vm.CanSeeRecipePage && !vm.CanSeeSettingsPage && !vm.CanTuneRecipe && !vm.CanForceAdvance,
             vm.RolePermissionText);
 
-        vm.CurrentUser = "技术员";
+        vm.AttemptRoleChange("技术员", "123456");
         Check("CCD-017 管理员（技术员）界面：可查历史、可复核，但改不了配方与系统设置",
             vm.CanSeeHistoryPage && !vm.CanSeeRecipePage && !vm.CanSeeSettingsPage,
-            vm.RolePermissionText);
+            vm.RolePermissionText + "（用出厂默认口令 123456 登录成功）");
 
-        vm.CurrentUser = "工程师";
+        vm.AttemptRoleChange("工程师", "888888");
         Check("CCD-018 工程师（运维）界面：配方 / 历史 / 设置全部开放",
             vm.CanSeeRecipePage && vm.CanSeeHistoryPage && vm.CanSeeSettingsPage,
-            vm.RolePermissionText);
+            vm.RolePermissionText + "（用出厂默认口令 888888 登录成功）");
+
+        // ================================================================
+        // 权限（AC）：口令、锁定、改密、会话超时 —— 现场反馈"这个权限没有设计好，没有密码"
+        // ================================================================
+        var security = vm.Access!;
+
+        // ---- AC-01 哈希不可逆、校验可靠 ----
+        string hash1 = PasswordHasher.Hash("wf-2026");
+        string hash2 = PasswordHasher.Hash("wf-2026");
+
+        Check("AC-01 口令只存哈希：同一口令两次结果不同（有随机盐），正确口令能校验、错的不行、坏字符串不炸",
+            hash1 != hash2
+            && PasswordHasher.Verify("wf-2026", hash1)
+            && !PasswordHasher.Verify("wf-2027", hash1)
+            && !PasswordHasher.Verify("wf-2026", "这不是一个哈希")
+            && !PasswordHasher.Verify("wf-2026", ""),
+            $"两次哈希：{hash1[..18]}… / {hash2[..18]}…（都通过校验，错口令被拒）");
+
+        // ---- AC-02 升级要口令，口令不对不升 ----
+        vm.AttemptRoleChange("操作员", null);
+        var wrong = vm.AttemptRoleChange("工程师", "000000");
+        bool stayedOperator = vm.IsOperator;
+        var right = vm.AttemptRoleChange("工程师", "888888");
+
+        Check("AC-02 升级权限必须口令：错口令被拒绝且角色不变，对的口令才切到工程师",
+            !wrong.Ok && stayedOperator && right.Ok && vm.IsEngineer,
+            $"错口令：{wrong.Message}（角色还是 {(stayedOperator ? "操作员" : vm.CurrentUser)}）；" +
+            $"对口令：{right.Message}");
+
+        // ---- AC-03 降级不要口令（交还权限不该再拦） ----
+        var downgrade = vm.AttemptRoleChange("操作员", null);
+        Check("AC-03 降级不需要口令：工程师 → 操作员 直接生效（交还权限不该再拦一道）",
+            downgrade.Ok && vm.IsOperator,
+            downgrade.Message);
+
+        // ---- AC-04 连续输错会临时锁定（但不会永久锁死） ----
+        var lockMessages = new List<string>();
+        for (int i = 0; i < 6; i++)
+            lockMessages.Add(vm.AttemptRoleChange("技术员", "错的").Message);
+
+        bool lockedMentioned = lockMessages.Any(m => m.Contains("锁定") || m.Contains("临时锁定"));
+        var whileLocked = vm.AttemptRoleChange("技术员", "123456");   // 锁定期内，正确口令也进不去
+
+        Check("AC-04 连续输错临时锁定：错够次数后提示锁定，且锁定期间即使口令正确也拒绝（防坐在这里猜）",
+            lockedMentioned && !whileLocked.Ok,
+            $"最后一次提示：{lockMessages[^1]}；锁定期间用正确口令的结果：{whileLocked.Message}");
+
+        // 把锁定清掉，后面的用例要用
+        security.Get("技术员").LockedUntil = null;
+
+        // ---- AC-05 改口令的几条基本规矩 ----
+        var badOld = security.ChangePassword("技术员", "不是原口令", "wf-1234", "wf-1234");
+        var tooShort = security.ChangePassword("技术员", "123456", "12", "12");
+        var mismatch = security.ChangePassword("技术员", "123456", "wf-1234", "wf-9999");
+        var sameAsDefault = security.ChangePassword("技术员", "123456", "123456", "123456");
+        var changed = security.ChangePassword("技术员", "123456", "wf-1234", "wf-1234");
+
+        var oldRejected = security.SignIn("技术员", "123456");
+        var newAccepted = security.SignIn("技术员", "wf-1234");
+
+        Check("AC-05 改口令：原口令错 / 太短 / 两次不一致 / 与默认口令相同 —— 全部拒绝；改成功后旧口令失效、新口令生效",
+            !badOld.Ok && !tooShort.Ok && !mismatch.Ok && !sameAsDefault.Ok
+            && changed.Ok && !oldRejected.Ok && newAccepted.Ok,
+            $"原口令错：{badOld.Message}；太短：{tooShort.Message}；不一致：{mismatch.Message}；" +
+            $"与默认相同：{sameAsDefault.Message}；改成功后旧口令={oldRejected.Ok}、新口令={newAccepted.Ok}");
+
+        // ---- AC-06 恢复默认口令是"后门"，必须锁死：需要工程师口令 ----
+        bool resetWithWrong = vm.ResetRolePassword("技术员", "错的");
+        bool resetWithRight = vm.ResetRolePassword("技术员", "888888");
+        var backToDefault = security.SignIn("技术员", "123456");
+
+        Check("AC-06 恢复默认口令必须验工程师口令：错了不改；对了才恢复（现场口令忘了的补救通道）",
+            !resetWithWrong && resetWithRight && backToDefault.Ok,
+            $"错口令被拒={!resetWithWrong}；恢复成功={resetWithRight}；恢复后默认口令可用={backToDefault.Ok}");
+
+        // ---- AC-07 空闲超时自动退回操作员 ----
+        vm.AttemptRoleChange("工程师", "888888");
+        bool notYet = vm.EnforceSessionTimeout(TimeSpan.FromMinutes(1));
+        bool timedOut = vm.EnforceSessionTimeout(TimeSpan.FromMinutes(99));
+
+        Check("AC-07 会话超时：空闲没到点不降级；空闲超过设定时间自动退回操作员（工程师调完参数走了，权限不能留着）",
+            !notYet && timedOut && vm.IsOperator,
+            $"空闲 1 分钟={notYet}，空闲 99 分钟={timedOut}，现在角色={vm.CurrentUser}");
+
+        // ---- AC-08 出厂默认口令要有提醒，改掉之后提醒消失 ----
+        bool warnedWhileDefault = vm.HasDefaultPasswords;
+        security.ChangePassword("工程师", "888888", "wf-eng", "wf-eng");
+        security.ChangePassword("技术员", "123456", "wf-tec", "wf-tec");
+        bool warnedAfterChange = vm.HasDefaultPasswords;
+
+        Check("AC-08 默认口令提醒：只要还有角色在用出厂默认口令就提醒；全部改掉后提醒消失",
+            warnedWhileDefault && !warnedAfterChange,
+            $"改之前提醒={warnedWhileDefault}，全部改完之后提醒={warnedAfterChange}");
+
+        // 把角色恢复到工程师再往下跑：后面的界面用例（建图 / 框位 / 步骤）都以"运维视角"验证。
+        // 这一句同时也回归了"口令改完之后还能正常登录"。
+        var backToWork = vm.AttemptRoleChange("工程师", "wf-eng");
+        Check("AC-09 改完口令后仍能正常登录（用新口令切回工程师，供后续用例继续跑）",
+            backToWork.Ok && vm.IsEngineer,
+            backToWork.Message + $"；当前角色 {vm.CurrentUser}");
 
         // ---- 十八·建图三件事（UI-01~03）----
         //

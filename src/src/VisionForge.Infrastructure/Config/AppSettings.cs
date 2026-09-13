@@ -65,6 +65,9 @@ public sealed class AppSettings
     /// <summary>AI 自主学习配置（边生产边学，越用越准）。</summary>
     public SelfLearningOptions SelfLearning { get; set; } = new();
 
+    /// <summary>权限配置（会话超时、口令长度、锁定策略）。账号本身在 data\security\accounts.json。</summary>
+    public SecurityOptions Security { get; set; } = new();
+
     // ---------- 派生路径（不序列化） ----------
     [JsonIgnore] public string RecipeDirectory => Path.Combine(DataRoot, "recipes");
     [JsonIgnore] public string HistoryDirectory => Path.Combine(DataRoot, "history");
@@ -256,6 +259,7 @@ public static class AppSettingsStore
             loaded.Station ??= new StationOptions();
             loaded.Mes ??= new MesOptions();
             loaded.SelfLearning ??= new SelfLearningOptions();
+            loaded.Security ??= new SecurityOptions();
             return loaded;
         }
         catch (Exception ex)

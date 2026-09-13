@@ -159,6 +159,9 @@ public sealed partial class MainViewModel
             // AI 自主学习：读回上一次的自学账本（现场要能回看"它什么时候学了什么"）
             LoadSelfLearning();
 
+            // 权限：读回账号（口令哈希）并拉起会话超时检查
+            LoadSecurity();
+
             // 加载最近的历史记录到表格
             try
             {
