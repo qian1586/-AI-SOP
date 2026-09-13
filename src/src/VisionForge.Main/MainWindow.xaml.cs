@@ -198,6 +198,20 @@ public partial class MainWindow : Window
     private void OnRoiTileMarkOkClick(object sender, RoutedEventArgs e)
         => MarkRoiTile(sender, isOk: true);
 
+    /// <summary>
+    /// 框位格子右键 →「切换完成条件（有东西 ⇄ 被拿走）」。
+    ///
+    /// <para>放料/装配类工序：框里出现零件 = 这一步做到了；
+    /// 取件/拿工具类工序正相反：框里的东西消失 = 这一步做到了。</para>
+    /// </summary>
+    private void OnRoiTileToggleDoneModeClick(object sender, RoutedEventArgs e)
+    {
+        if (_boundViewModel is null) return;
+        if ((sender as FrameworkElement)?.DataContext is not RoiTargetOption option) return;
+
+        _boundViewModel.ToggleRoiDoneMode(option);
+    }
+
     private void OnRoiTileMarkNgClick(object sender, RoutedEventArgs e)
         => MarkRoiTile(sender, isOk: false);
 

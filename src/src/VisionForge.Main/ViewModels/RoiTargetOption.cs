@@ -73,11 +73,32 @@ public sealed class RoiTargetOption : ObservableObject
 
     public string StateText => _stateKey switch
     {
-        "ok" => "OK",
-        "ng" => "NG",
+        // 颜色表达的是"这一步做到没有"，所以文案也用它 ——
+        // 拿走型工序里"框空了"才是完成，写 OK/NG 反而看不懂。
+        "ok" => "完成",
+        "ng" => "未完成",
         "active" => "拿不准",
         _ => HasSamples ? "待识别" : "未教",
     };
+
+    private bool _doneWhenAbsent;
+
+    /// <summary>这个框的完成条件：true = 东西被拿走才算完成（取件类工序）。</summary>
+    public bool DoneWhenAbsent
+    {
+        get => _doneWhenAbsent;
+        private set
+        {
+            if (!SetProperty(ref _doneWhenAbsent, value)) return;
+            OnPropertyChanged(nameof(DoneModeText));
+            OnPropertyChanged(nameof(StateText));
+            OnPropertyChanged(nameof(TileHint));
+        }
+    }
+
+    public string DoneModeText => _doneWhenAbsent ? "完成条件：被拿走" : "完成条件：有东西";
+
+    internal void SetDoneMode(bool absentMeansDone) => DoneWhenAbsent = absentMeansDone;
 
     internal void SetStateKey(string key)
     {
@@ -125,7 +146,7 @@ public sealed class RoiTargetOption : ObservableObject
     /// （编译期直接报 MC3044 —— 这个坑踩过一次）。</para>
     /// </summary>
     public string TileHint =>
-        $"{EvidenceHint}　左键：选中这个框去教 OK / NG；右键：改名称/参数，或删除这个框";
+        $"{DoneModeText}　{EvidenceHint}　左键：选中去教 OK / NG；右键：改完成条件 / 名称 / 删除";
 
     internal void SetEvidence(BitmapSource? image, DateTime time)
     {

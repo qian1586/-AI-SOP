@@ -688,6 +688,15 @@
                                                     <MenuItem Header="步骤设置（名称 / 参数）…"
                                                               Click="OnRoiTileSettingsClick"
                                                               DataContext="{Binding}"/>
+                                                    <!--
+                                                        完成条件：放料类工序是"有东西=完成"，
+                                                        取件/拿笔这类是"被拿走=完成"。
+                                                        现场就是卡在这里 —— 按默认规则，一开始两支笔都在，
+                                                        三个框全判完成、流程瞬间走完，"没法跑一套流程"。
+                                                    -->
+                                                    <MenuItem Header="切换完成条件（有东西 ⇄ 被拿走）"
+                                                              Click="OnRoiTileToggleDoneModeClick"
+                                                              DataContext="{Binding}"/>
                                                     <Separator/>
                                                     <!-- 误检修正：这一下判错了，一句话纠正，当场变成样本（AI 自学习的最强信号） -->
                                                     <MenuItem Header="标记误判：其实是对的（记 OK）"

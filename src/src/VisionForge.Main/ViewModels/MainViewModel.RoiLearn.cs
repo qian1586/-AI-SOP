@@ -297,7 +297,11 @@ public sealed partial class MainViewModel
 
         foreach (var option in RoiTargets)
         {
-            if (option.Index - 1 < rois.Count) option.Rename(rois[option.Index - 1].Name);
+            if (option.Index - 1 < rois.Count)
+            {
+                option.Rename(rois[option.Index - 1].Name);
+                option.SetDoneMode(rois[option.Index - 1].DoneWhenAbsent);
+            }
 
             option.SetCounts(
                 samples.Count(s => s.RoiIndex == option.Index && s.IsOk),
@@ -482,6 +486,19 @@ public sealed partial class MainViewModel
             return;
         }
 
+        // 录像当相机时：开始识别就把录像放起来。
+        // 导入后是暂停的（方便画框/教样本），不自动播的话这一步会"看起来什么都没发生"。
+        if (_videoCamera is not null && !_videoCamera.IsPlaying)
+        {
+            if (_videoCamera.PositionSeconds >= _videoCamera.DurationSeconds - 0.1)
+                _videoCamera.Restart();
+            else
+                _videoCamera.Play();
+
+            OnPropertyChanged(nameof(VideoPlayButtonText));
+            RefreshVideoProgress();
+        }
+
         // 三条识别通路不能同时驱动流程（会重复计数、互相打架）：开这个就关掉另外两个
         if (IsRecognizing) ToggleRecognize();
         if (IsProcessRunning) StopProcessMonitor();
@@ -634,7 +651,19 @@ public sealed partial class MainViewModel
 
     private void ApplyRoiRecognition(int seq, ActionRecognition recognition)
     {
-        string stateKey = recognition.IsOk switch
+        // 这个框"做完了"对应哪种状态（有东西 / 被拿走）—— 见 RoiRegion.DoneWhenAbsent
+        var roiList = ActiveRecipe?.Rois.Where(r => r.Enabled).ToList();
+        bool absentMeansDone = roiList is not null
+                               && seq - 1 < roiList.Count
+                               && roiList[seq - 1].DoneWhenAbsent;
+
+        bool? stepDone = recognition.IsOk is null
+            ? null
+            : absentMeansDone ? recognition.IsOk == false : recognition.IsOk == true;
+
+        // 颜色一律表达"这一步做到没有"：绿=做到了、红=还没、橙=拿不准。
+        // 这样操作员看的永远是同一件事，不用去分辨"这个框是正着判还是反着判"。
+        string stateKey = stepDone switch
         {
             true => "ok",
             false => "ng",
@@ -659,24 +688,73 @@ public sealed partial class MainViewModel
         {
             RoiLearnResultText = recognition.IsOk switch
             {
-                true => "OK",
-                false => "NG",
+                true => absentMeansDone ? "有东西（未完成）" : "OK",
+                false => absentMeansDone ? "已拿走（完成）" : "NG",
                 _ => "无法判定",
             };
             RoiLearnStateKey = stateKey;
             RoiLearnConfidence = recognition.Confidence;
-            RoiLearnHint = recognition.Message;
+            RoiLearnHint = recognition.Message +
+                           (absentMeansDone ? "｜本框完成条件：被拿走 = 这一步完成" : "");
         }
 
         bool first = !_roiLastStates.TryGetValue(seq, out var previous);
-        bool changed = first || previous != recognition.IsOk;
-        _roiLastStates[seq] = recognition.IsOk;
+        bool changed = first || previous != stepDone;
+        _roiLastStates[seq] = stepDone;      // 存的是"这一步完成没有"，不是原判
         _lastRecognition[seq] = recognition;
 
-        if (!changed || recognition.IsOk is null) return;
+        if (!changed || stepDone is null) return;
 
-        if (recognition.IsOk == true) DriveFlowFromRoiStates(seq, recognition);
+        if (stepDone == true) DriveFlowFromRoiStates(seq, recognition);
         else FeedRoiViolation(seq, recognition);
+    }
+
+    /// <summary>
+    /// 这个框现在算不算"这一步做到了"。
+    ///
+    /// <para>公开出来是为了让自检能直接断言"拿走型工序"的判定：
+    /// 没拿 = 框里还有东西 = 这一步没完成 = 流程推不动（判漏做）。</para>
+    /// </summary>
+    public bool IsStepCompleted(int seq, bool? roiIsOk)
+    {
+        if (roiIsOk is null) return false;
+
+        var rois = ActiveRecipe?.Rois.Where(r => r.Enabled).ToList();
+        bool absentMeansDone = rois is not null && seq - 1 < rois.Count && rois[seq - 1].DoneWhenAbsent;
+
+        return absentMeansDone ? roiIsOk == false : roiIsOk == true;
+    }
+
+    /// <summary>
+    /// 切换某个框的"完成条件"：有东西=完成 ⇄ 被拿走=完成。
+    ///
+    /// <para>切换后把各框的最近状态清掉：判定基准变了，
+    /// 留着旧状态会拿两种口径混着推流程。</para>
+    /// </summary>
+    public void ToggleRoiDoneMode(RoiTargetOption? option)
+    {
+        if (option is null) return;
+
+        var rois = ActiveRecipe?.Rois.Where(r => r.Enabled).ToList();
+        if (rois is null || option.Index - 1 >= rois.Count) return;
+
+        var roi = rois[option.Index - 1];
+        roi.DoneWhenAbsent = !roi.DoneWhenAbsent;
+
+        if (ActiveRecipe is not null) SaveRecipeInBackground(ActiveRecipe);
+
+        _roiLastStates.Clear();
+        _lastRecognition.Clear();
+        RebuildRoiLibrary();
+        RefreshRoiTargetCounts();
+
+        RoiLearnHint = roi.DoneWhenAbsent
+            ? $"第 {option.Index} 个框「{roi.Name}」改成：东西被拿走 = 这一步完成（取件/拿笔这类工序）"
+            : $"第 {option.Index} 个框「{roi.Name}」改成：框里有东西 = 这一步完成（放料/装配类工序）";
+
+        StatusMessage = RoiLearnHint;
+        _log.Info($"区域学习：第 {option.Index} 个框完成条件改为 " +
+                  (roi.DoneWhenAbsent ? "被拿走=完成" : "有东西=完成"));
     }
 
     /// <summary>
@@ -707,12 +785,18 @@ public sealed partial class MainViewModel
     /// <summary>框判 NG：留一张当时的画面 + 一条违规记录 + 写 PLC（如果正是当前该做的那一步）。</summary>
     private void FeedRoiViolation(int seq, ActionRecognition recognition)
     {
+        // 文案要说清"是这一步没完成"，而不是笼统的"识别为 NG" ——
+        // 拿走型工序里"框里还有东西"恰恰是没做的意思，只说 NG 现场会看懵。
+        bool absentMeansDone = IsAbsentMeansDone(seq);
+
         var violation = new ProcessViolation
         {
             Code = ViolationCode.StepNotDone,
             StepSeq = seq,
             TargetId = "P" + seq,
-            Message = $"第 {seq} 个框识别为 NG：{recognition.Message}",
+            Message = absentMeansDone
+                ? $"第 {seq} 步没做：框里的东西还在（本框完成条件是「被拿走」）"
+                : $"第 {seq} 个框识别为 NG：{recognition.Message}",
         };
 
         var evidence = CaptureEvidence($"第 {seq} 个框 NG · {recognition.Match?.Display ?? "无匹配样本"}");
@@ -737,6 +821,13 @@ public sealed partial class MainViewModel
             StatusMessage = violation.Message;
             _log.Warn(violation.Message);
         }
+    }
+
+    /// <summary>这个框的完成条件是不是"被拿走才算完成"。</summary>
+    private bool IsAbsentMeansDone(int seq)
+    {
+        var rois = ActiveRecipe?.Rois.Where(r => r.Enabled).ToList();
+        return rois is not null && seq - 1 < rois.Count && rois[seq - 1].DoneWhenAbsent;
     }
 
     /// <summary>

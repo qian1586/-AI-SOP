@@ -917,6 +917,144 @@ public sealed class SelfTestRunner
             && csvOk,
             $"写入={saved}，读回={timingLoaded.Count} 条，最慢那条：{slowOne?.PaceText}（DeltaMs={slowOne?.DeltaMs:F0}），导出行数≥3={csvOk}");
 
+        // ---- UI-21 录像当相机：播放 / 暂停 / 重播 ----
+        //
+        // 这条是现场反馈的回归："视频能导入，但暂停不了"。
+        // 录像用的是 WPF MediaPlayer，它的事件只会投递到"创建它的那个线程的 Dispatcher"上，
+        // 而自检默认跑在线程池线程上（没有消息循环）—— 所以这里单起一个带消息泵的 STA 线程，
+        // 否则 MediaOpened 永远不触发，测出来的是"打不开"而不是真实行为。
+        string clipPath = Path.Combine(AppContext.BaseDirectory, "Assets", "test-clip.mp4");
+        bool videoOk = false;
+        string videoDetail = "未执行";
+
+        void PumpMessages(int ms)
+        {
+            var frame = new System.Windows.Threading.DispatcherFrame();
+            var timer = new System.Windows.Threading.DispatcherTimer(
+                TimeSpan.FromMilliseconds(ms),
+                System.Windows.Threading.DispatcherPriority.Background,
+                (_, _) => frame.Continue = false,
+                System.Windows.Threading.Dispatcher.CurrentDispatcher);
+            timer.Start();
+            System.Windows.Threading.Dispatcher.PushFrame(frame);
+            timer.Stop();
+        }
+
+        var videoThread = new System.Threading.Thread(() =>
+        {
+            try
+            {
+                if (!File.Exists(clipPath))
+                {
+                    videoDetail = "找不到测试片：" + clipPath;
+                    return;
+                }
+
+                // 装上 Dispatcher 的同步上下文：这样 await 之后的续体会回到本线程（和真机上的 UI 线程一致）。
+                // 不装的话续体会跳到线程池，而 MediaPlayer 是 DispatcherObject —— 跨线程访问直接抛异常。
+                System.Threading.SynchronizationContext.SetSynchronizationContext(
+                    new System.Windows.Threading.DispatcherSynchronizationContext(
+                        System.Windows.Threading.Dispatcher.CurrentDispatcher));
+
+                var clip = new VideoFileCamera(clipPath);
+
+                // 注意不能写成 .GetAwaiter().GetResult()：那会把这个线程堵死，
+                // 消息循环不转 → MediaOpened 永远不来 → 15 秒超时后报"打不开"。
+                // 正确做法是边泵消息边等。
+                var connectTask = clip.ConnectAsync();
+                var connectWatch = System.Diagnostics.Stopwatch.StartNew();
+                while (!connectTask.IsCompleted && connectWatch.Elapsed.TotalSeconds < 15)
+                    PumpMessages(50);
+
+                if (!connectTask.IsCompleted || !connectTask.Result)
+                {
+                    videoDetail = "测试片打不开（编码不支持？）";
+                    clip.Dispose();
+                    return;
+                }
+
+                clip.Play();
+                PumpMessages(500);
+                double play1 = clip.PositionSeconds;
+                PumpMessages(600);
+                double play2 = clip.PositionSeconds;
+
+                clip.Pause();
+                PumpMessages(200);
+                double pause1 = clip.PositionSeconds;
+                PumpMessages(600);
+                double pause2 = clip.PositionSeconds;
+
+                clip.Restart();
+                PumpMessages(200);
+                double restart = clip.PositionSeconds;
+
+                bool advanced = play2 > play1 + 0.15;          // 播放中位置要往前走
+                bool frozen = Math.Abs(pause2 - pause1) < 0.08; // 暂停后位置不能动
+                bool rewound = restart < pause2;                // 重播要回到开头
+
+                videoOk = advanced && frozen && rewound;
+                videoDetail = $"播放 {play1:F2}s→{play2:F2}s（前进 {play2 - play1:F2}s）；" +
+                              $"暂停后 {pause1:F2}s→{pause2:F2}s（变化 {Math.Abs(pause2 - pause1):F2}s）；" +
+                              $"重播后 {restart:F2}s";
+                clip.Dispose();
+            }
+            catch (Exception ex)
+            {
+                videoDetail = "异常：" + ex.Message;
+            }
+            finally
+            {
+                System.Windows.Threading.Dispatcher.CurrentDispatcher.InvokeShutdown();
+            }
+        });
+
+        videoThread.SetApartmentState(System.Threading.ApartmentState.STA);
+        videoThread.Start();
+        videoThread.Join(25000);
+
+        Check("UI-21 录像当相机：能播放、能暂停（暂停后位置不再前进）、能重播回开头",
+            videoOk, videoDetail);
+
+        // ---- UI-22 拿走型工序：没拿 = 这一步没完成 ----
+        //
+        // 这是现场"标了三个框、教了 OK/NG、但跑不起一套流程"的根因：
+        // "从左拿笔→从右拿笔→放到中间"是**拿走**流程，而默认规则是"有东西=完成"，
+        // 于是开头两支笔都在 → 三个框全判完成 → 流程瞬间走完，后面拿笔反倒成了违规。
+        for (int i = 0; i < 3; i++)
+        {
+            vm.BeginRoiDraft(700 + i * 25, 300);
+            vm.UpdateRoiDraft(760 + i * 25, 360);
+            vm.CommitRoiDraft();
+        }
+
+        var roiOptions = vm.RoiTargets.ToList();
+
+        // 默认（有东西=完成）：笔在 = 完成
+        bool presentMode = vm.IsStepCompleted(1, true) && !vm.IsStepCompleted(1, false);
+
+        // 切成"被拿走=完成"：笔在 = 未完成、拿走 = 完成、拿不准 = 不算完成
+        vm.ToggleRoiDoneMode(roiOptions[0]);
+        vm.ToggleRoiDoneMode(roiOptions[1]);
+        bool absentMode = !vm.IsStepCompleted(1, true)
+                          && vm.IsStepCompleted(1, false)
+                          && !vm.IsStepCompleted(1, null);
+
+        int stepsAfterDraw = vm.Sop.Steps.Count;
+        bool stillThere = vm.IsStepCompleted(1, true);     // 先把结果记下来，再清框
+        bool takenAway = vm.IsStepCompleted(1, false);
+        vm.ClearRoisCommand.Execute(null);      // 还原成"没有框"，不影响后面的用例
+
+        Check("UI-22 拿走型工序：完成条件切成「被拿走」后，笔还在=未完成、笔拿走=完成、拿不准=不算；默认规则正好相反",
+            roiOptions.Count == 3
+            && stepsAfterDraw == 3
+            && presentMode
+            && absentMode
+            && vm.RoiTargets.Count == 0,
+            $"画了 {roiOptions.Count} 个框（对应 {stepsAfterDraw} 道工序）；" +
+            $"默认模式[有东西=完成]={presentMode}；" +
+            $"改成[被拿走=完成]后：笔在={stillThere}（应为 False）、笔拿走={takenAway}（应为 True）");
+
         // ---- 首页底部状态条（UI-11）----
         Check("UI-11 底部状态条：工单号/步骤进度/合规率/工位状态都能算出来（未接相机时明确显示「未连接」）",
             vm.WorkOrderText.StartsWith("WO-")

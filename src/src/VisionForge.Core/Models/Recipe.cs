@@ -79,6 +79,22 @@ public sealed class RoiRegion
     public double Height { get; set; }
     public bool Enabled { get; set; } = true;
 
+    /// <summary>
+    /// 这一步"做完了"对应框里的哪种状态。
+    ///
+    /// <para><b>false（默认）= 有东西才算完成</b>：放料、装配、插入这类工序 ——
+    /// 框里出现零件，说明这一步做到了。</para>
+    ///
+    /// <para><b>true = 东西被拿走才算完成</b>：取件、拿工具这类"拿走"工序 ——
+    /// 框里的东西消失，才说明这一步做到了。</para>
+    ///
+    /// <para>为什么必须有这一条：现场第一次试就卡住了 ——
+    /// "我从左上角拿一支笔、右上角拿一支笔、放到中间"是个典型的**拿走**流程，
+    /// 但按默认规则"有东西=完成"，一开始两支笔都在，三个框全判完成、流程瞬间走完，
+    /// 后面拿笔反而被当成违规。现场的原话是"没法跑一套流程"。</para>
+    /// </summary>
+    public bool DoneWhenAbsent { get; set; }
+
     /// <summary>按实际分辨率换算成像素矩形 (x, y, w, h)。</summary>
     public (int X, int Y, int W, int H) ToPixels(int imageWidth, int imageHeight) =>
         ((int)(X * imageWidth), (int)(Y * imageHeight),

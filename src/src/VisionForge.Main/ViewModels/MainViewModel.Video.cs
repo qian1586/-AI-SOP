@@ -116,9 +116,16 @@ public sealed partial class MainViewModel
             _camera.FrameArrived += OnFrameArrived;
             await video.StartGrabbingAsync();
 
+            // 导入后**先暂停在第 1 帧**。
+            //
+            // 现场反馈"导入后不能暂停视频"—— 真正的问题是：原来一导入就自己播起来，
+            // 画面一直在动，人根本没法从容地画框、教 OK/NG；31 秒一过又停在结尾。
+            // 所以默认停住，等现场说"好了"再点播放（点「开始识别」也会自动播）。
+            video.Pause();
+
             RefreshVideoProgress();
             StatusMessage = $"已把录像当相机：{VideoNameText}（{video.DurationSeconds:F0}s）—— " +
-                            "接下来照常框 ROI、教 OK/NG、看计时";
+                            "已暂停在第 1 帧：先画框、教 OK/NG；好了点「▶ 播放录像」跑流程";
             _log.Info($"录像已作为相机打开：{dialog.FileName}（{video.DurationSeconds:F0}s）");
         }
         catch (Exception ex)
